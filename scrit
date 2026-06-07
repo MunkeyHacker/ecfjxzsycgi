@@ -13,7 +13,7 @@ STAND_COMMAND_OWNER_NAME = tostring((STAND_GLOBAL_ENV and STAND_GLOBAL_ENV.STAND
 if STAND_GLOBAL_ENV then
     STAND_GLOBAL_ENV.STAND_COMMAND_OWNER_NAME = STAND_COMMAND_OWNER_NAME
 end
-STAND_ALT_SLOT = STAND_ALT_SLOT or 1 -- 1 = right side, 2 = left side
+STAND_ALT_SLOT = STAND_ALT_SLOT or 1 -- 1 right, 2 left, 3 right top, 4 left top, etc.
 STAND_ALT_ORDER = STAND_ALT_ORDER or {} -- Optional: { "FirstAltName", "SecondAltName" }
 STAND_ALT_SIDE = STAND_ALT_SIDE or nil -- Optional override: "right" or "left"
 
@@ -229,6 +229,7 @@ local STAND_ALT_ACTIVE = {}
 local STAND_ALT_LAST_SYNC = 0
 local STAND_FOLLOW_ASSIGN_TOKEN = 0
 local STAND_FOLLOW_SIDE_OVERRIDE_SIGN = nil
+local STAND_FOLLOW_SLOT_OVERRIDE = nil
 local lastFollowSideCollisionCheck = 0
 local getWorldCharacter
 
@@ -243,6 +244,8 @@ local FOLLOW_MOVE_THRESHOLD = 0.8
 local FOLLOW_POSITION_LEAD = 0.14
 local FOLLOW_IDLE_BOB_AMOUNT = 0.5
 local FOLLOW_IDLE_BOB_SPEED = 1.25
+local STAND_MAX_FOLLOW_SLOTS = 7
+local FOLLOW_TOP_HEIGHT_STEP = 3
 local LOOPKILL_INTERVAL = 2.25
 local EQUIP_RETRY_INTERVAL = 0.35
 local RELOAD_PAUSE_TIME = 6
@@ -640,32 +643,64 @@ function STAND_GET_ALT_SLOT()
     if type(STAND_ALT_ORDER) == "table" then
         for index, altName in ipairs(STAND_ALT_ORDER) do
             if tostring(altName):lower() == LocalPlayer.Name:lower() then
-                return math.clamp(index, 1, 2)
+                return math.clamp(index, 1, STAND_MAX_FOLLOW_SLOTS)
             end
         end
     end
 
     local slot = tonumber(STAND_ALT_SLOT) or 1
-    return math.clamp(math.floor(slot), 1, 2)
+    return math.clamp(math.floor(slot), 1, STAND_MAX_FOLLOW_SLOTS)
 end
 
-function STAND_GET_BASE_FOLLOW_SIDE_SIGN()
+function STAND_GET_FOLLOW_SLOT_SIDE_SIGN(slot)
+    return (tonumber(slot) or 1) % 2 == 0 and -1 or 1
+end
+
+function STAND_GET_FOLLOW_SLOT_TIER(slot)
+    return math.floor((math.max(1, tonumber(slot) or 1) - 1) / 2)
+end
+
+function STAND_GET_BASE_FOLLOW_SLOT()
     local side = tostring(STAND_ALT_SIDE or ""):lower()
     if side == "left" or side == "l" or side == "-1" then
-        return -1
+        return 2
     end
     if side == "right" or side == "r" or side == "1" then
         return 1
     end
-    return STAND_GET_ALT_SLOT() == 2 and -1 or 1
+    return STAND_GET_ALT_SLOT()
+end
+
+function STAND_GET_BASE_FOLLOW_SIDE_SIGN()
+    return STAND_GET_FOLLOW_SLOT_SIDE_SIGN(STAND_GET_BASE_FOLLOW_SLOT())
+end
+
+function STAND_GET_FOLLOW_SLOT()
+    if STAND_FOLLOW_SLOT_OVERRIDE then
+        return math.clamp(math.floor(tonumber(STAND_FOLLOW_SLOT_OVERRIDE) or 1), 1, STAND_MAX_FOLLOW_SLOTS)
+    end
+    if STAND_FOLLOW_SIDE_OVERRIDE_SIGN then
+        return STAND_FOLLOW_SIDE_OVERRIDE_SIGN < 0 and 2 or 1
+    end
+    return STAND_GET_BASE_FOLLOW_SLOT()
 end
 
 function STAND_GET_FOLLOW_SIDE_SIGN()
-    return STAND_FOLLOW_SIDE_OVERRIDE_SIGN or STAND_GET_BASE_FOLLOW_SIDE_SIGN()
+    return STAND_GET_FOLLOW_SLOT_SIDE_SIGN(STAND_GET_FOLLOW_SLOT())
+end
+
+function STAND_GET_FOLLOW_SLOT_NAME(slot)
+    slot = math.clamp(math.floor(tonumber(slot) or 1), 1, STAND_MAX_FOLLOW_SLOTS)
+    local sideName = STAND_GET_FOLLOW_SLOT_SIDE_SIGN(slot) < 0 and "LEFT" or "RIGHT"
+    local tier = STAND_GET_FOLLOW_SLOT_TIER(slot)
+    if tier <= 0 then
+        return sideName
+    end
+    return sideName .. " TOP" .. (tier > 1 and (" " .. tostring(tier)) or "")
 end
 
 function STAND_GET_FOLLOW_SIDE_NAME()
-    return STAND_GET_FOLLOW_SIDE_SIGN() < 0 and "LEFT" or "RIGHT"
+    return STAND_GET_FOLLOW_SLOT_NAME(STAND_GET_FOLLOW_SLOT())
 end
 
 function STAND_GET_ALT_SYNC_KEY(target)
@@ -690,16 +725,18 @@ function STAND_RECORD_ACTIVE_ALT(altName, userId)
     }
 end
 
-function STAND_RECORD_ALT_ASSIGNMENT(targetKey, targetName, altName, sideSign)
+function STAND_RECORD_ALT_ASSIGNMENT(targetKey, targetName, altName, followSlot)
     targetKey = tostring(targetKey or ""):lower()
     altName = tostring(altName or "")
     if targetKey == "" or altName == "" then return end
 
+    local slot = math.clamp(math.floor(tonumber(followSlot) or 1), 1, STAND_MAX_FOLLOW_SLOTS)
     STAND_ALT_ASSIGNMENTS[targetKey] = STAND_ALT_ASSIGNMENTS[targetKey] or {}
     STAND_ALT_ASSIGNMENTS[targetKey][altName:lower()] = {
         altName = altName,
         targetName = tostring(targetName or ""),
-        sideSign = sideSign and sideSign < 0 and -1 or 1,
+        slot = slot,
+        sideSign = STAND_GET_FOLLOW_SLOT_SIDE_SIGN(slot),
         time = time(),
     }
     STAND_RECORD_ACTIVE_ALT(altName, nil)
@@ -768,15 +805,14 @@ function STAND_GET_ACTIVE_ALT_LIST()
     return list
 end
 
-function STAND_GET_DETERMINISTIC_ALT_SIDE(target)
+function STAND_GET_DETERMINISTIC_ALT_SLOT(target)
     local list = STAND_GET_ACTIVE_ALT_LIST()
     if #list < 2 then return nil end
 
-    local baseSign = STAND_GET_BASE_FOLLOW_SIDE_SIGN()
     local myName = LocalPlayer.Name:lower()
     for index, info in ipairs(list) do
         if tostring(info.name or ""):lower() == myName then
-            return index % 2 == 1 and baseSign or -baseSign
+            return math.clamp(index, 1, STAND_MAX_FOLLOW_SLOTS)
         end
     end
     return nil
@@ -791,15 +827,29 @@ function STAND_PLAYER_IS_ALT_CANDIDATE(plr, target)
     return true
 end
 
+function STAND_FIND_ROOT(char)
+    if not char then return nil end
+
+    local ok, root = pcall(function()
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        return (humanoid and humanoid.RootPart)
+            or char:FindFirstChild("HumanoidRootPart")
+            or char:FindFirstChild("Torso")
+            or char:FindFirstChild("UpperTorso")
+    end)
+
+    return ok and root or nil
+end
+
 function STAND_GET_PLAYER_FOLLOW_ROOT(plr)
     if not plr then return nil end
     if plr == LocalPlayer then
-        return getRoot(LocalPlayer.Character)
+        return STAND_FIND_ROOT(LocalPlayer.Character)
     end
     if type(getWorldCharacter) == "function" then
-        return getRoot(getWorldCharacter(plr))
+        return STAND_FIND_ROOT(getWorldCharacter(plr))
     end
-    return getRoot(plr.Character)
+    return STAND_FIND_ROOT(plr.Character)
 end
 
 function STAND_GET_PHYSICAL_FOLLOW_SIDE_SIGN(root, targetRoot)
@@ -812,11 +862,40 @@ function STAND_GET_PHYSICAL_FOLLOW_SIDE_SIGN(root, targetRoot)
     return sideOffset < 0 and -1 or 1
 end
 
-function STAND_GET_NEARBY_ALT_SIDE_OCCUPANCY(target, targetRoot)
-    local hasRight = false
-    local hasLeft = false
+function STAND_GET_PHYSICAL_FOLLOW_SLOT(root, targetRoot)
+    local sideSign = STAND_GET_PHYSICAL_FOLLOW_SIDE_SIGN(root, targetRoot)
+    if not sideSign then return nil end
 
-    if not targetRoot then return hasRight, hasLeft end
+    local deltaY = root.Position.Y - targetRoot.Position.Y
+    local bestSlot = sideSign == -1 and 2 or 1
+    local bestDistance = math.huge
+    for slot = 1, STAND_MAX_FOLLOW_SLOTS do
+        if STAND_GET_FOLLOW_SLOT_SIDE_SIGN(slot) == sideSign then
+            local tier = STAND_GET_FOLLOW_SLOT_TIER(slot)
+            local idleHeight = FOLLOW_IDLE_HEIGHT + (tier * FOLLOW_TOP_HEIGHT_STEP)
+            local moveHeight = FOLLOW_MOVE_HEIGHT + (tier * FOLLOW_TOP_HEIGHT_STEP)
+            local distance = math.min(math.abs(deltaY - idleHeight), math.abs(deltaY - moveHeight))
+            if distance < bestDistance then
+                bestDistance = distance
+                bestSlot = slot
+            end
+        end
+    end
+    return bestSlot
+end
+
+function STAND_ALT_NEAR_FOLLOW_HEIGHT_OK(deltaY, includeLocal)
+    if includeLocal then return true end
+    local maxTier = STAND_GET_FOLLOW_SLOT_TIER(STAND_MAX_FOLLOW_SLOTS)
+    local maxHeight = FOLLOW_MOVE_HEIGHT + (maxTier * FOLLOW_TOP_HEIGHT_STEP) + 4
+    return deltaY >= 1.2 and deltaY <= maxHeight
+end
+
+function STAND_GET_NEARBY_ALT_SLOT_OCCUPANCY(target, targetRoot)
+    local occupied = {}
+    local count = 0
+
+    if not targetRoot then return occupied, count end
 
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer and STAND_PLAYER_IS_ALT_CANDIDATE(plr, target) then
@@ -824,20 +903,29 @@ function STAND_GET_NEARBY_ALT_SIDE_OCCUPANCY(target, targetRoot)
             if root then
                 local delta = root.Position - targetRoot.Position
                 local flatDistance = Vector3.new(delta.X, 0, delta.Z).Magnitude
-                local heightOk = delta.Y >= 1.2 and delta.Y <= 10
-                if heightOk and flatDistance <= FOLLOW_SIDE_COLLISION_RADIUS then
-                    local sideSign = STAND_GET_PHYSICAL_FOLLOW_SIDE_SIGN(root, targetRoot)
-                    if sideSign == 1 then
-                        hasRight = true
-                    elseif sideSign == -1 then
-                        hasLeft = true
+                if STAND_ALT_NEAR_FOLLOW_HEIGHT_OK(delta.Y, false) and flatDistance <= FOLLOW_SIDE_COLLISION_RADIUS then
+                    local slot = STAND_GET_PHYSICAL_FOLLOW_SLOT(root, targetRoot)
+                    if slot and not occupied[slot] then
+                        occupied[slot] = true
+                        count += 1
                     end
                 end
             end
         end
     end
 
-    return hasRight, hasLeft
+    return occupied, count
+end
+
+function STAND_GET_FIRST_OPEN_FOLLOW_SLOT(target, targetRoot)
+    local occupied, count = STAND_GET_NEARBY_ALT_SLOT_OCCUPANCY(target, targetRoot)
+    if count <= 0 then return nil end
+    for slot = 1, STAND_MAX_FOLLOW_SLOTS do
+        if not occupied[slot] then
+            return slot
+        end
+    end
+    return STAND_MAX_FOLLOW_SLOTS
 end
 
 function STAND_UPDATE_FOLLOW_SIDE_FROM_NEARBY(target, targetRoot)
@@ -846,13 +934,10 @@ function STAND_UPDATE_FOLLOW_SIDE_FROM_NEARBY(target, targetRoot)
     if now - lastFollowSideCollisionCheck < FOLLOW_SIDE_COLLISION_RECHECK_INTERVAL then return end
     lastFollowSideCollisionCheck = now
 
-    local hasRight, hasLeft = STAND_GET_NEARBY_ALT_SIDE_OCCUPANCY(target, targetRoot)
-    local myPhysicalSide = STAND_GET_PHYSICAL_FOLLOW_SIDE_SIGN(STAND_GET_PLAYER_FOLLOW_ROOT(LocalPlayer), targetRoot)
-    if hasRight and not hasLeft then
-        STAND_FOLLOW_SIDE_OVERRIDE_SIGN = myPhysicalSide == 1 and 1 or -1
-        return
-    elseif hasLeft and not hasRight then
-        STAND_FOLLOW_SIDE_OVERRIDE_SIGN = myPhysicalSide == -1 and -1 or 1
+    local openSlot = STAND_GET_FIRST_OPEN_FOLLOW_SLOT(target, targetRoot)
+    if openSlot then
+        STAND_FOLLOW_SLOT_OVERRIDE = openSlot
+        STAND_FOLLOW_SIDE_OVERRIDE_SIGN = nil
         return
     end
 
@@ -863,7 +948,7 @@ function STAND_UPDATE_FOLLOW_SIDE_FROM_NEARBY(target, targetRoot)
             if root then
                 local delta = root.Position - targetRoot.Position
                 local flatDistance = Vector3.new(delta.X, 0, delta.Z).Magnitude
-                local heightOk = plr == LocalPlayer or (delta.Y >= 1.2 and delta.Y <= 10)
+                local heightOk = STAND_ALT_NEAR_FOLLOW_HEIGHT_OK(delta.Y, plr == LocalPlayer)
                 if heightOk and flatDistance <= FOLLOW_SIDE_COLLISION_RADIUS then
                     table.insert(contenders, {
                         name = plr.Name,
@@ -896,11 +981,11 @@ function STAND_UPDATE_FOLLOW_SIDE_FROM_NEARBY(target, targetRoot)
         return tostring(a.name):lower() < tostring(b.name):lower()
     end)
 
-    local baseSign = STAND_GET_BASE_FOLLOW_SIDE_SIGN()
     local myName = LocalPlayer.Name:lower()
     for index, info in ipairs(contenders) do
         if tostring(info.name or ""):lower() == myName then
-            STAND_FOLLOW_SIDE_OVERRIDE_SIGN = index % 2 == 1 and baseSign or -baseSign
+            STAND_FOLLOW_SLOT_OVERRIDE = math.clamp(index, 1, STAND_MAX_FOLLOW_SLOTS)
+            STAND_FOLLOW_SIDE_OVERRIDE_SIGN = nil
             return
         end
     end
@@ -909,33 +994,43 @@ end
 function STAND_PICK_FOLLOW_SIDE_FOR_TARGET(target)
     STAND_CLEAN_ALT_ASSIGNMENTS()
 
-    local baseSign = STAND_GET_BASE_FOLLOW_SIDE_SIGN()
+    local baseSlot = STAND_GET_BASE_FOLLOW_SLOT()
     local targetRoot = STAND_GET_PLAYER_FOLLOW_ROOT(target)
     if targetRoot then
-        local hasRight, hasLeft = STAND_GET_NEARBY_ALT_SIDE_OCCUPANCY(target, targetRoot)
-        if hasRight and not hasLeft then
-            return -1
-        elseif hasLeft and not hasRight then
-            return 1
+        local openSlot = STAND_GET_FIRST_OPEN_FOLLOW_SLOT(target, targetRoot)
+        if openSlot then
+            return openSlot
         end
     end
 
-    local deterministicSign = STAND_GET_DETERMINISTIC_ALT_SIDE(target)
-    if deterministicSign then
-        return deterministicSign
+    local deterministicSlot = STAND_GET_DETERMINISTIC_ALT_SLOT(target)
+    if deterministicSlot then
+        return deterministicSlot
     end
 
     local targetKey = STAND_GET_ALT_SYNC_KEY(target)
     local byAlt = STAND_ALT_ASSIGNMENTS[targetKey]
     if byAlt then
+        local occupied = {}
+        local hasOtherAssignment = false
         for altKey, info in pairs(byAlt) do
-            if altKey ~= LocalPlayer.Name:lower() and info.sideSign == baseSign then
-                return -baseSign
+            if altKey ~= LocalPlayer.Name:lower() then
+                local slot = math.clamp(math.floor(tonumber(info.slot) or (info.sideSign and info.sideSign < 0 and 2 or 1)), 1, STAND_MAX_FOLLOW_SLOTS)
+                occupied[slot] = true
+                hasOtherAssignment = true
             end
+        end
+        if hasOtherAssignment then
+            for slot = 1, STAND_MAX_FOLLOW_SLOTS do
+                if not occupied[slot] then
+                    return slot
+                end
+            end
+            return STAND_MAX_FOLLOW_SLOTS
         end
     end
 
-    return baseSign
+    return baseSlot
 end
 
 function STAND_SEND_ALT_SYNC_MESSAGE(message)
@@ -943,10 +1038,11 @@ function STAND_SEND_ALT_SYNC_MESSAGE(message)
     -- Public chat sync is disabled; visible sync messages were too noisy.
 end
 
-function STAND_BUILD_ALT_SYNC_MESSAGE(target, sideSign)
+function STAND_BUILD_ALT_SYNC_MESSAGE(target, followSlot)
     if not target then return nil end
     local targetKey = STAND_GET_ALT_SYNC_KEY(target)
-    local sideText = sideSign and sideSign < 0 and "left" or "right"
+    local slot = math.clamp(math.floor(tonumber(followSlot) or 1), 1, STAND_MAX_FOLLOW_SLOTS)
+    local sideText = STAND_GET_FOLLOW_SLOT_SIDE_SIGN(slot) < 0 and "left" or "right"
     return table.concat({
         STAND_ALT_SYNC_PREFIX,
         "follow",
@@ -954,6 +1050,7 @@ function STAND_BUILD_ALT_SYNC_MESSAGE(target, sideSign)
         targetKey,
         target.Name,
         sideText,
+        tostring(slot),
     }, "|")
 end
 
@@ -964,19 +1061,20 @@ function STAND_BROADCAST_ALT_HELLO(force)
     STAND_RECORD_ACTIVE_ALT(LocalPlayer.Name, LocalPlayer.UserId)
 end
 
-function STAND_BROADCAST_ALT_ASSIGNMENT(target, sideSign)
+function STAND_BROADCAST_ALT_ASSIGNMENT(target, followSlot)
     if not target then return end
-    local message = STAND_BUILD_ALT_SYNC_MESSAGE(target, sideSign)
-    STAND_RECORD_ALT_ASSIGNMENT(STAND_GET_ALT_SYNC_KEY(target), target.Name, LocalPlayer.Name, sideSign)
+    local message = STAND_BUILD_ALT_SYNC_MESSAGE(target, followSlot)
+    STAND_RECORD_ALT_ASSIGNMENT(STAND_GET_ALT_SYNC_KEY(target), target.Name, LocalPlayer.Name, followSlot)
     STAND_SEND_ALT_SYNC_MESSAGE(message)
 end
 
 function STAND_ASSIGN_FOLLOW_SIDE(target)
     STAND_BROADCAST_ALT_HELLO(true)
-    local sideSign = STAND_PICK_FOLLOW_SIDE_FOR_TARGET(target)
-    STAND_FOLLOW_SIDE_OVERRIDE_SIGN = sideSign
-    STAND_BROADCAST_ALT_ASSIGNMENT(target, sideSign)
-    return sideSign
+    local followSlot = STAND_PICK_FOLLOW_SIDE_FOR_TARGET(target)
+    STAND_FOLLOW_SLOT_OVERRIDE = followSlot
+    STAND_FOLLOW_SIDE_OVERRIDE_SIGN = nil
+    STAND_BROADCAST_ALT_ASSIGNMENT(target, followSlot)
+    return followSlot
 end
 
 function STAND_HANDLE_ALT_SYNC_MESSAGE(message, sender)
@@ -1001,8 +1099,9 @@ function STAND_HANDLE_ALT_SYNC_MESSAGE(message, sender)
         local targetKey = parts[4] or ""
         local targetName = parts[5] or ""
         local sideText = tostring(parts[6] or ""):lower()
-        local sideSign = (sideText == "left" or sideText == "-1") and -1 or 1
-        STAND_RECORD_ALT_ASSIGNMENT(targetKey, targetName, altName, sideSign)
+        local sideSlot = (sideText == "left" or sideText == "-1") and 2 or 1
+        local followSlot = tonumber(parts[7]) or sideSlot
+        STAND_RECORD_ALT_ASSIGNMENT(targetKey, targetName, altName, followSlot)
     end
     return true
 end
@@ -1829,10 +1928,7 @@ function getPlayer(name)
 end
 
 function getRoot(char)
-    if not char then return nil end
-    return char:FindFirstChild("HumanoidRootPart")
-        or char:FindFirstChild("Torso")
-        or char:FindFirstChild("UpperTorso")
+    return STAND_FIND_ROOT(char)
 end
 
 function getHumanoid(char)
@@ -1994,16 +2090,16 @@ function STAND_APPLY_FOLLOW_TARGET(target, announce)
     followTargetName = target.Name
     isFollowing = true
     isFlying = true
-    local sideSign = STAND_ASSIGN_FOLLOW_SIDE(target)
+    local followSlot = STAND_ASSIGN_FOLLOW_SIDE(target)
     if refreshCustomAnimation then
         task.defer(refreshCustomAnimation)
     else
         createCustomAnimation(LocalPlayer.Character)
     end
     if announce then
-        print("Following -> " .. target.Name .. " [" .. (sideSign < 0 and "LEFT" or "RIGHT") .. "]")
+        print("Following -> " .. target.Name .. " [" .. STAND_GET_FOLLOW_SLOT_NAME(followSlot) .. "]")
     end
-    return sideSign
+    return followSlot
 end
 
 function STAND_START_FOLLOW_TARGET(target, announce)
@@ -4040,6 +4136,7 @@ clearFollow = function()
     isFlying = false
     followTargetMoving = false
     STAND_FOLLOW_SIDE_OVERRIDE_SIGN = nil
+    STAND_FOLLOW_SLOT_OVERRIDE = nil
     stopStrafing()
     releaseCharacterControl()
 end
@@ -5446,6 +5543,7 @@ track(Players.PlayerRemoving:Connect(function(plr)
     if plr == followTarget then
         followTarget = nil
         STAND_FOLLOW_SIDE_OVERRIDE_SIGN = nil
+        STAND_FOLLOW_SLOT_OVERRIDE = nil
     end
     if plr == loopkillTarget then
         loopkillTarget = nil
@@ -5601,10 +5699,12 @@ local COMMAND_ALIASES = {
     got = "goto",
     go = "goto",
     to = "goto",
+    mainesp = "mainesp",
     esp = "esp",
     es = "esp",
     ees = "esp",
     eps = "esp",
+    unmainesp = "unmainesp",
     unesp = "unesp",
     unes = "unesp",
     noesp = "unesp",
@@ -5629,8 +5729,61 @@ local COMMAND_ALIASES = {
     mobilefocus = "focus",
 }
 
+local COMMAND_KNOWN = {}
+local STAND_MAX_COMMAND_COMPACT_LENGTH = 0
+for alias, canonical in pairs(COMMAND_ALIASES) do
+    COMMAND_KNOWN[alias] = true
+    COMMAND_KNOWN[canonical] = true
+    STAND_MAX_COMMAND_COMPACT_LENGTH = math.max(STAND_MAX_COMMAND_COMPACT_LENGTH, #alias, #canonical)
+end
+
+function STAND_CANONICALIZE_COMMAND_TEXT(text)
+    return tostring(text or ""):lower():gsub("[%s_%-%./]+", "")
+end
+
 function normalizeCommand(cmd)
-    return COMMAND_ALIASES[cmd] or cmd
+    local compact = STAND_CANONICALIZE_COMMAND_TEXT(cmd)
+    return COMMAND_ALIASES[compact] or compact
+end
+
+function STAND_PARSE_COMMAND_BODY(body)
+    body = tostring(body or ""):match("^%s*(.-)%s*$") or ""
+    local tokens = {}
+    for startPos, token, endPos in body:gmatch("()(%S+)()") do
+        table.insert(tokens, {
+            startPos = startPos,
+            endPos = endPos,
+            text = token,
+        })
+    end
+
+    if #tokens <= 0 then
+        return "", nil
+    end
+
+    local combined = ""
+    local bestCommand = nil
+    local bestEnd = nil
+    for index, token in ipairs(tokens) do
+        combined = combined .. token.text
+        local compact = STAND_CANONICALIZE_COMMAND_TEXT(combined)
+        if COMMAND_KNOWN[compact] then
+            bestCommand = normalizeCommand(compact)
+            bestEnd = token.endPos
+        end
+        if #compact > STAND_MAX_COMMAND_COMPACT_LENGTH then
+            break
+        end
+    end
+
+    if bestCommand then
+        local argText = body:sub(bestEnd):match("^%s*(.-)%s*$")
+        return bestCommand, argText ~= "" and argText or nil
+    end
+
+    local rawCommand = tokens[1].text
+    local argText = body:sub(tokens[1].endPos):match("^%s*(.-)%s*$")
+    return normalizeCommand(rawCommand), argText ~= "" and argText or nil
 end
 
 function STAND_GET_COMMAND_OWNER_NAME()
@@ -5656,9 +5809,8 @@ function isCommandSender(sender)
 end
 
 function STAND_PREFIX_STARTS_COMMAND(text, prefixIndex)
-    local rawCommand = text:sub(prefixIndex + #PREFIX):match("^%s*(%S+)")
-    rawCommand = rawCommand and rawCommand:lower() or nil
-    return rawCommand and COMMAND_ALIASES[rawCommand] ~= nil
+    local command = STAND_PARSE_COMMAND_BODY(text:sub(prefixIndex + #PREFIX))
+    return command and command ~= "" and COMMAND_KNOWN[command] ~= nil
 end
 
 function STAND_FIND_NEXT_STACK_PREFIX(text, searchStart)
@@ -5701,8 +5853,8 @@ function STAND_GET_STACK_COMMAND(chunk)
     if text:sub(1, #PREFIX) == PREFIX then
         text = text:sub(#PREFIX + 1)
     end
-    local rawCommand = (text:match("^%s*(%S+)") or ""):lower()
-    return normalizeCommand(rawCommand)
+    local command = STAND_PARSE_COMMAND_BODY(text)
+    return command
 end
 
 function STAND_COMMAND_IS_COMBAT(cmd)
@@ -5804,10 +5956,7 @@ function onChat(message, sender, fromStack)
     end
 
     local body = message:sub(#PREFIX + 1):match("^%s*(.-)%s*$") or ""
-    local cmd, argText = body:match("^(%S+)%s*(.*)$")
-    cmd = (cmd or ""):lower()
-    cmd = normalizeCommand(cmd)
-    argText = argText ~= "" and argText or nil
+    local cmd, argText = STAND_PARSE_COMMAND_BODY(body)
     recordCommandActivity(cmd)
 
     if cmd == "cmds" or cmd == "commands" then
@@ -5833,7 +5982,7 @@ function onChat(message, sender, fromStack)
         print("!msg <text>              -> Owner makes alt chat text")
         print("!transfer <user>         -> Transfer command owner")
         print("!side left/right         -> Set this alt follow side")
-        print("!slot 1/2                -> 1 right side, 2 left side")
+        print("!slot 1-7                -> right/left/top follow slots")
         print("!annoy                   -> Disabled, logic kept in script")
         print("stack commands: !gkill user !view")
         print("!target <user>           -> Select target for view/goto/esp")
@@ -5897,13 +6046,17 @@ function onChat(message, sender, fromStack)
         elseif side == "auto" or side == "default" or side == "clear" then
             STAND_ALT_SIDE = nil
         end
+        STAND_FOLLOW_SLOT_OVERRIDE = nil
+        STAND_FOLLOW_SIDE_OVERRIDE_SIGN = nil
         print("Alt side -> " .. STAND_GET_FOLLOW_SIDE_NAME())
 
     elseif cmd == "slot" then
         local slot = tonumber(tostring(argText or ""):match("%d+"))
-        if slot == 1 or slot == 2 then
-            STAND_ALT_SLOT = slot
+        if slot and slot >= 1 and slot <= STAND_MAX_FOLLOW_SLOTS then
+            STAND_ALT_SLOT = math.floor(slot)
             STAND_ALT_SIDE = nil
+            STAND_FOLLOW_SLOT_OVERRIDE = nil
+            STAND_FOLLOW_SIDE_OVERRIDE_SIGN = nil
         end
         print("Alt slot -> " .. tostring(STAND_GET_ALT_SLOT()) .. " [" .. STAND_GET_FOLLOW_SIDE_NAME() .. "]")
 
@@ -6353,8 +6506,8 @@ track(RunService.Heartbeat:Connect(function()
 
     -- Normal follow resumes whenever gun strafing is inactive.
     if isFollowing and followTarget and LocalPlayer.Character and not gkillEnabled and not activelyStrafing and not safeSpotConnection and time() >= reloadUntil then
-        local myRoot = getRoot(LocalPlayer.Character)
-        local tRoot = getRoot(getWorldCharacter(followTarget))
+        local myRoot = STAND_GET_PLAYER_FOLLOW_ROOT(LocalPlayer)
+        local tRoot = STAND_GET_PLAYER_FOLLOW_ROOT(followTarget)
         if myRoot and tRoot then
             local flatVelocity = Vector3.new(tRoot.AssemblyLinearVelocity.X, 0, tRoot.AssemblyLinearVelocity.Z)
             local targetKO = isTargetKO(followTarget)
@@ -6364,9 +6517,11 @@ track(RunService.Heartbeat:Connect(function()
             followTargetMoving = not targetKO and flatVelocity.Magnitude > FOLLOW_MOVE_THRESHOLD
 
             STAND_UPDATE_FOLLOW_SIDE_FROM_NEARBY(followTarget, tRoot)
-            local sideDistance = FOLLOW_SIDE_DISTANCE * STAND_GET_FOLLOW_SIDE_SIGN()
+            local followSlot = STAND_GET_FOLLOW_SLOT()
+            local followTier = STAND_GET_FOLLOW_SLOT_TIER(followSlot)
+            local sideDistance = FOLLOW_SIDE_DISTANCE * STAND_GET_FOLLOW_SLOT_SIDE_SIGN(followSlot)
             local backOffset = followTargetMoving and FOLLOW_MOVE_BACK_OFFSET or FOLLOW_IDLE_BACK_OFFSET
-            local height = followTargetMoving and FOLLOW_MOVE_HEIGHT or FOLLOW_IDLE_HEIGHT
+            local height = (followTargetMoving and FOLLOW_MOVE_HEIGHT or FOLLOW_IDLE_HEIGHT) + (followTier * FOLLOW_TOP_HEIGHT_STEP)
             if not followTargetMoving then
                 height += math.sin(time() * FOLLOW_IDLE_BOB_SPEED) * FOLLOW_IDLE_BOB_AMOUNT
             end
