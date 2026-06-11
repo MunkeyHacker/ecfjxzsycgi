@@ -202,7 +202,98 @@ local function copy(text)
     return ok
 end
 
-local function runScript(tier, status)
+local function hasStarted()
+    local stand = rawget(env or {}, "STAND") or rawget(_G, "STAND")
+    if type(stand) == "table" and type(stand.State) == "table" and stand.State.Alive == true then
+        return true
+    end
+
+    for _, parent in ipairs(parentList()) do
+        local found = false
+        pcall(function()
+            found = parent:FindFirstChild("CoroutineMainUserSelect") ~= nil
+                or parent:FindFirstChild("StandMainUserSelect") ~= nil
+        end)
+        if found then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function download(url)
+    local ok, body = pcall(function()
+        return game:HttpGet(url)
+    end)
+
+    if not ok then
+        return nil, tostring(body)
+    end
+
+    body = tostring(body or "")
+    if body == "" then
+        return nil, "empty response"
+    end
+
+    local fn, err = loadstring(body)
+    if not fn then
+        return nil, tostring(err)
+    end
+
+    return fn, nil
+end
+
+local function startTier(tier, fn, key, cleanFirst)
+    saveState(tier, key)
+    if cleanFirst then
+        setProgress(1, "Loaded")
+        task.wait(0.12)
+        cleanup()
+
+        local ok, err = xpcall(fn, function(e)
+            return tostring(e) .. "\n" .. tostring(debug and debug.traceback and debug.traceback() or "")
+        end)
+
+        return ok, err, hasStarted()
+    end
+
+    local finished = false
+    local runOk = false
+    local runErr = nil
+
+    task.spawn(function()
+        runOk, runErr = xpcall(fn, function(e)
+            return tostring(e) .. "\n" .. tostring(debug and debug.traceback and debug.traceback() or "")
+        end)
+        finished = true
+    end)
+
+    local started = false
+    local stopAt = time() + 3
+    while time() < stopAt do
+        if hasStarted() then
+            started = true
+            break
+        end
+        if finished then
+            break
+        end
+        task.wait(0.05)
+    end
+
+    if started then
+        return true, nil, true
+    end
+
+    if finished then
+        return runOk, runErr, false
+    end
+
+    return false, "no start signal", false
+end
+
+local function runScript(status)
     if busy then return end
 
     local key = trim(guiRef and guiRef:FindFirstChild("KeyInput", true) and guiRef:FindFirstChild("KeyInput", true).Text or currentKey())
@@ -213,58 +304,47 @@ local function runScript(tier, status)
         return
     end
 
-    local url = tier == "premium" and cfg.premiumScript or cfg.freeScript
     busy = true
     saveKey(key)
-    saveState(tier, key)
+    saveState("free", key)
 
-    status.Text = tier == "premium" and "Loading premium..." or "Loading free..."
+    status.Text = "Checking key..."
     status.TextColor3 = Color3.fromRGB(145, 220, 255)
     setProgress(0.2, "Connecting")
 
     task.spawn(function()
-        setProgress(0.42, "Downloading")
-        local ok, body = pcall(function()
-            return game:HttpGet(url)
-        end)
-
-        if not ok then
-            busy = false
-            status.Text = "Could not load Coroutine."
-            status.TextColor3 = Color3.fromRGB(255, 120, 120)
-            setProgress(0, "Failed")
-            warn("[Coroutine] " .. tostring(body))
-            return
+        setProgress(0.38, "Trying premium")
+        local premiumFn, premiumErr = download(cfg.premiumScript)
+        if premiumFn then
+            saveState("premium", key)
+            local runOk, runErr, started = startTier("premium", premiumFn, key, false)
+            if started then
+                setProgress(1, "Premium")
+                task.wait(0.12)
+                cleanup()
+                return
+            elseif runOk then
+                warn("[Coroutine] premium returned without starting")
+            else
+                warn("[Coroutine] premium rejected: " .. tostring(runErr))
+            end
+        else
+            warn("[Coroutine] premium load failed: " .. tostring(premiumErr))
         end
 
-        body = tostring(body or "")
-        if body == "" then
-            busy = false
-            status.Text = "Empty response."
-            status.TextColor3 = Color3.fromRGB(255, 120, 120)
-            setProgress(0, "Failed")
-            return
-        end
-
-        setProgress(0.7, "Checking")
-        local fn, err = loadstring(body)
-        if not fn then
+        setProgress(0.68, "Trying free")
+        status.Text = "Trying free..."
+        local freeFn, freeErr = download(cfg.freeScript)
+        if not freeFn then
             busy = false
             status.Text = "Load failed."
             status.TextColor3 = Color3.fromRGB(255, 120, 120)
             setProgress(0, "Failed")
-            warn("[Coroutine] " .. tostring(err))
+            warn("[Coroutine] free load failed: " .. tostring(freeErr))
             return
         end
 
-        status.Text = "Starting..."
-        setProgress(1, "Loaded")
-        task.wait(0.12)
-        cleanup()
-
-        local runOk, runErr = xpcall(fn, function(e)
-            return tostring(e) .. "\n" .. tostring(debug and debug.traceback and debug.traceback() or "")
-        end)
+        local runOk, runErr = startTier("free", freeFn, key, true)
         if not runOk then
             warn("[Coroutine] " .. tostring(runErr))
         end
@@ -322,7 +402,7 @@ status.BackgroundTransparency = 1
 status.Position = UDim2.new(0, 18, 0, 48)
 status.Size = UDim2.new(1, -36, 0, 34)
 status.Font = Enum.Font.Gotham
-status.Text = "Paste your key, then choose a version."
+status.Text = "Paste your key, then load."
 status.TextColor3 = Color3.fromRGB(155, 166, 190)
 status.TextSize = 13
 status.TextWrapped = true
@@ -379,29 +459,17 @@ progressFill.BorderSizePixel = 0
 progressFill.Parent = trackBar
 corner(progressFill, 5)
 
-local freeButton = Instance.new("TextButton")
-freeButton.Position = UDim2.new(0, 18, 0, 188)
-freeButton.Size = UDim2.new(0.5, -23, 0, 42)
-freeButton.BackgroundColor3 = Color3.fromRGB(46, 118, 255)
-freeButton.BorderSizePixel = 0
-freeButton.Font = Enum.Font.GothamBold
-freeButton.Text = "Free"
-freeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-freeButton.TextSize = 14
-freeButton.Parent = frame
-corner(freeButton, 8)
-
-local premiumButton = Instance.new("TextButton")
-premiumButton.Position = UDim2.new(0.5, 5, 0, 188)
-premiumButton.Size = UDim2.new(0.5, -23, 0, 42)
-premiumButton.BackgroundColor3 = Color3.fromRGB(125, 78, 255)
-premiumButton.BorderSizePixel = 0
-premiumButton.Font = Enum.Font.GothamBold
-premiumButton.Text = "Premium"
-premiumButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-premiumButton.TextSize = 14
-premiumButton.Parent = frame
-corner(premiumButton, 8)
+local loadButton = Instance.new("TextButton")
+loadButton.Position = UDim2.new(0, 18, 0, 188)
+loadButton.Size = UDim2.new(1, -36, 0, 42)
+loadButton.BackgroundColor3 = Color3.fromRGB(46, 118, 255)
+loadButton.BorderSizePixel = 0
+loadButton.Font = Enum.Font.GothamBold
+loadButton.Text = "Load"
+loadButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+loadButton.TextSize = 14
+loadButton.Parent = frame
+corner(loadButton, 8)
 
 local getKeyButton = Instance.new("TextButton")
 getKeyButton.Position = UDim2.new(0, 18, 0, 244)
@@ -415,12 +483,8 @@ getKeyButton.TextSize = 13
 getKeyButton.Parent = frame
 corner(getKeyButton, 8)
 
-track(freeButton.Activated:Connect(function()
-    runScript("free", status)
-end))
-
-track(premiumButton.Activated:Connect(function()
-    runScript("premium", status)
+track(loadButton.Activated:Connect(function()
+    runScript(status)
 end))
 
 track(getKeyButton.Activated:Connect(function()
