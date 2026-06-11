@@ -1,14 +1,8 @@
--- ============================================================
--- COROUTINE STAND KEY PRELOADER
--- ============================================================
--- This small UI asks for a Polsec key, stores it globally, then loads
--- loader_polsec_only.txt from your hosted raw URL.
--- ============================================================
-
-local PRELOADER_CONFIG = {
-    LoaderUrl = "https://raw.githubusercontent.com/MunkeyHacker/ecfjxzsycgi/refs/heads/main/loader_polsec_only.txt",
-    FreeKeyUrl = "https://getpolsec.com/ad/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb",
-    Title = "Coroutine Stand",
+local cfg = {
+    name = "Coroutine Stand",
+    freeScript = "https://api.getpolsec.com/scripts/hosted/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb.lua",
+    premiumScript = "https://api.getpolsec.com/scripts/hosted/170922bf810a59c5580e9ada89e5ce022e5f9a6addc3d04a91dcb7deb90353ef.lua",
+    getKey = "https://getpolsec.com/ad/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb",
 }
 
 if not game:IsLoaded() then
@@ -24,61 +18,30 @@ while not LocalPlayer do
     LocalPlayer = Players.LocalPlayer
 end
 
-local function trim(value)
-    value = tostring(value or "")
-    return value:match("^%s*(.-)%s*$") or ""
+local env = (getgenv and getgenv()) or _G
+local conns = {}
+local guiRef = nil
+local busy = false
+local progressFill, progressText
+
+local function trim(v)
+    v = tostring(v or "")
+    return v:match("^%s*(.-)%s*$") or ""
 end
 
-local function isPlaceholder(value)
-    value = trim(value)
-    return value == "" or value:find("PASTE_", 1, true) ~= nil or value:find("YOUR_", 1, true) ~= nil
-end
-
-local function getEnvironment()
-    if getgenv then
-        local ok, env = pcall(getgenv)
-        if ok and type(env) == "table" then
-            return env
-        end
-    end
-    return _G
-end
-
-local ENV = getEnvironment()
-local ACTIVE_GUI = nil
-
-local STAND = rawget(ENV or {}, "STAND")
-if type(STAND) ~= "table" then
-    STAND = {}
-end
-STAND.UI = type(STAND.UI) == "table" and STAND.UI or {}
-STAND.UI.KeyPreloader = type(STAND.UI.KeyPreloader) == "table" and STAND.UI.KeyPreloader or {}
-ENV.STAND = STAND
-_G.STAND = STAND
-
-local connections = {}
-
-local function disconnect(connection)
-    if connection and typeof(connection) == "RBXScriptConnection" then
-        pcall(function()
-            connection:Disconnect()
-        end)
-    end
-end
-
-local function getUiParents()
-    local parents = {}
+local function parentList()
+    local list = {}
 
     local ok, hui = pcall(function()
         return gethui and gethui() or nil
     end)
     if ok and hui then
-        table.insert(parents, hui)
+        table.insert(list, hui)
     end
 
     local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 10)
     if playerGui then
-        table.insert(parents, playerGui)
+        table.insert(list, playerGui)
     end
 
     local coreGui
@@ -86,245 +49,284 @@ local function getUiParents()
         return game:GetService("CoreGui")
     end)
     if ok and coreGui then
-        table.insert(parents, coreGui)
+        table.insert(list, coreGui)
     end
 
-    return parents
+    return list
 end
 
-local function cleanup()
-    for _, connection in ipairs(connections) do
-        disconnect(connection)
-    end
-    connections = {}
-
-    pcall(function()
-        if ACTIVE_GUI and ACTIVE_GUI.Parent then
-            ACTIVE_GUI:Destroy()
-        end
-    end)
-    ACTIVE_GUI = nil
-
-    for _, parent in ipairs(getUiParents()) do
+local function disconnect(c)
+    if c and typeof(c) == "RBXScriptConnection" then
         pcall(function()
-            local oldGui = parent:FindFirstChild("CoroutinePolsecKeyPreloader")
-            if oldGui then oldGui:Destroy() end
-            oldGui = parent:FindFirstChild("StandPolsecKeyPreloader")
-            if oldGui then oldGui:Destroy() end
+            c:Disconnect()
         end)
     end
 end
 
-if type(STAND.UI.KeyPreloader.Cleanup) == "function" then
-    pcall(STAND.UI.KeyPreloader.Cleanup)
-end
-STAND.UI.KeyPreloader.Cleanup = cleanup
-
-local function track(connection)
-    if connection and typeof(connection) == "RBXScriptConnection" then
-        table.insert(connections, connection)
+local function cleanup()
+    for _, c in ipairs(conns) do
+        disconnect(c)
     end
-    return connection
-end
+    conns = {}
 
-local function firstUiParent()
-    local parents = getUiParents()
-    return parents[1]
-end
-
-local function makeCorner(parent, radius)
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, radius or 8)
-    corner.Parent = parent
-    return corner
-end
-
-local function makeStroke(parent, color, transparency)
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = color or Color3.fromRGB(76, 92, 130)
-    stroke.Transparency = transparency or 0.2
-    stroke.Thickness = 1
-    stroke.Parent = parent
-    return stroke
-end
-
-local function currentKey()
-    local envKey = ENV and (rawget(ENV, "script_key") or rawget(ENV, "Key") or rawget(ENV, "KEY"))
-    local globalKey = rawget(_G, "script_key") or rawget(_G, "Key") or rawget(_G, "KEY")
-    return trim(envKey or globalKey or "")
-end
-
-local function publishKey(key)
-    key = trim(key)
-    if key == "" then
-        return false
-    end
-
-    if ENV then
-        ENV.script_key = key
-        ENV.Key = key
-        ENV.KEY = key
-    end
     pcall(function()
-        script_key = key
-    end)
-    _G.script_key = key
-    _G.Key = key
-    _G.KEY = key
-    return true
-end
-
-local function copyText(value)
-    local ok = false
-    pcall(function()
-        if setclipboard then
-            setclipboard(value)
-            ok = true
+        if guiRef and guiRef.Parent then
+            guiRef:Destroy()
         end
     end)
-    return ok
+    guiRef = nil
+
+    for _, parent in ipairs(parentList()) do
+        pcall(function()
+            local names = {
+                "CoroutineKeyLoader",
+                "CoroutinePolsecKeyPreloader",
+                "CoroutinePolsecLoaderStatus",
+                "StandPolsecKeyPreloader",
+                "StandPolsecLoaderStatus",
+            }
+            for _, name in ipairs(names) do
+                local old = parent:FindFirstChild(name)
+                if old then old:Destroy() end
+            end
+        end)
+    end
 end
 
-local progressFill = nil
-local progressText = nil
-local loadInProgress = false
+local function track(c)
+    if c and typeof(c) == "RBXScriptConnection" then
+        table.insert(conns, c)
+    end
+    return c
+end
 
-local function setProgress(value, text)
-    value = math.clamp(tonumber(value) or 0, 0, 1)
+local function corner(parent, radius)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, radius or 8)
+    c.Parent = parent
+    return c
+end
+
+local function pad(parent, left, right)
+    local p = Instance.new("UIPadding")
+    p.PaddingLeft = UDim.new(0, left or 0)
+    p.PaddingRight = UDim.new(0, right or left or 0)
+    p.Parent = parent
+    return p
+end
+
+local function setProgress(amount, text)
+    amount = math.clamp(tonumber(amount) or 0, 0, 1)
     if progressFill then
-        progressFill:TweenSize(UDim2.new(value, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.15, true)
+        progressFill:TweenSize(UDim2.new(amount, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.15, true)
     end
     if progressText and text then
         progressText.Text = text
     end
 end
 
-local function loadPolsecOnlyLoader(statusLabel)
-    if loadInProgress then
-        return
+local function currentKey()
+    return trim((env and (rawget(env, "script_key") or rawget(env, "Key") or rawget(env, "KEY"))) or rawget(_G, "script_key") or rawget(_G, "Key") or rawget(_G, "KEY"))
+end
+
+local function saveKey(key)
+    key = trim(key)
+    if key == "" then return false end
+
+    if env then
+        env.script_key = key
+        env.Key = key
+        env.KEY = key
     end
 
-    local loaderUrl = trim(PRELOADER_CONFIG.LoaderUrl)
-    if isPlaceholder(loaderUrl) then
-        statusLabel.Text = "Upload loader_polsec_only.txt and paste its raw URL into LoaderUrl."
-        statusLabel.TextColor3 = Color3.fromRGB(255, 195, 105)
+    script_key = key
+    _G.script_key = key
+    _G.Key = key
+    _G.KEY = key
+    return true
+end
+
+local function saveState(tier, key)
+    local stand = rawget(env or {}, "STAND")
+    if type(stand) ~= "table" then stand = {} end
+    stand.Config = type(stand.Config) == "table" and stand.Config or {}
+    stand.State = type(stand.State) == "table" and stand.State or {}
+    stand.UI = type(stand.UI) == "table" and stand.UI or {}
+
+    local main = trim((env and (rawget(env, "MainUsername") or rawget(env, "MAIN_USERNAME"))) or rawget(_G, "MainUsername") or rawget(_G, "MAIN_USERNAME"))
+
+    stand.Config.MainUsername = main
+    stand.Config.mainUsername = main
+    stand.Config.DisableInternalKeySystem = true
+    stand.Config.KeySystemEnabled = false
+    stand.Config.SecurityProvider = "polsec"
+    stand.Config.PolsecEnabled = true
+    stand.Config.RequirePolsecIntegrity = false
+    stand.Config.KeyTier = tier
+    stand.Config.Key = key
+    stand.Config.key = key
+    stand.Config.FreeKeyUrl = cfg.getKey
+
+    stand.State.MainUsername = main
+    stand.State.CommandOwnerName = main
+    stand.State.SecurityProvider = "polsec"
+    stand.State.PolsecEnabled = true
+    stand.State.KeyTier = tier
+    stand.State.PremiumAccess = tier == "premium"
+
+    env.STAND = stand
+    env.STAND_LOADER_CONFIG = stand.Config
+    env.STAND_SECURITY_PROVIDER = "polsec"
+    env.STAND_KEY_TIER = tier
+    env.STAND_PREMIUM_ACCESS = tier == "premium"
+    env.MainUsername = main
+    env.MAIN_USERNAME = main
+
+    _G.STAND = stand
+    _G.STAND_LOADER_CONFIG = stand.Config
+    _G.STAND_SECURITY_PROVIDER = "polsec"
+    _G.STAND_KEY_TIER = tier
+    _G.STAND_PREMIUM_ACCESS = tier == "premium"
+    _G.MainUsername = main
+    _G.MAIN_USERNAME = main
+end
+
+local function copy(text)
+    local ok = false
+    pcall(function()
+        if setclipboard then
+            setclipboard(text)
+            ok = true
+        end
+    end)
+    return ok
+end
+
+local function runScript(tier, status)
+    if busy then return end
+
+    local key = trim(guiRef and guiRef:FindFirstChild("KeyInput", true) and guiRef:FindFirstChild("KeyInput", true).Text or currentKey())
+    if key == "" then
+        status.Text = "Paste your key first."
+        status.TextColor3 = Color3.fromRGB(255, 195, 105)
         setProgress(0, "Waiting")
         return
     end
 
-    loadInProgress = true
-    setProgress(0.12, "Preparing")
-    statusLabel.Text = "Loading..."
-    statusLabel.TextColor3 = Color3.fromRGB(145, 220, 255)
+    local url = tier == "premium" and cfg.premiumScript or cfg.freeScript
+    busy = true
+    saveKey(key)
+    saveState(tier, key)
+
+    status.Text = tier == "premium" and "Loading premium..." or "Loading free..."
+    status.TextColor3 = Color3.fromRGB(145, 220, 255)
+    setProgress(0.2, "Connecting")
 
     task.spawn(function()
-        setProgress(0.3, "Downloading")
-        local ok, sourceOrError = pcall(function()
-            return game:HttpGet(loaderUrl)
+        setProgress(0.42, "Downloading")
+        local ok, body = pcall(function()
+            return game:HttpGet(url)
         end)
+
         if not ok then
-            loadInProgress = false
+            busy = false
+            status.Text = "Could not load Coroutine."
+            status.TextColor3 = Color3.fromRGB(255, 120, 120)
             setProgress(0, "Failed")
-            statusLabel.Text = "Could not download loader."
-            statusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
-            warn("[Preloader] " .. tostring(sourceOrError))
+            warn("[Coroutine] " .. tostring(body))
             return
         end
 
-        local source = tostring(sourceOrError or "")
-        if source == "" then
-            loadInProgress = false
+        body = tostring(body or "")
+        if body == "" then
+            busy = false
+            status.Text = "Empty response."
+            status.TextColor3 = Color3.fromRGB(255, 120, 120)
             setProgress(0, "Failed")
-            statusLabel.Text = "Loader download was empty."
-            statusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
             return
         end
 
-        setProgress(0.62, "Checking")
-        local chunk, compileError = loadstring(source)
-        if not chunk then
-            loadInProgress = false
+        setProgress(0.7, "Checking")
+        local fn, err = loadstring(body)
+        if not fn then
+            busy = false
+            status.Text = "Load failed."
+            status.TextColor3 = Color3.fromRGB(255, 120, 120)
             setProgress(0, "Failed")
-            statusLabel.Text = "Loader compile failed."
-            statusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
-            warn("[Preloader] " .. tostring(compileError))
+            warn("[Coroutine] " .. tostring(err))
             return
         end
 
-        setProgress(0.88, "Starting")
-        statusLabel.Text = "Starting loader..."
-        task.wait(0.2)
+        status.Text = "Starting..."
         setProgress(1, "Loaded")
-        task.wait(0.08)
+        task.wait(0.12)
         cleanup()
 
-        local runOk, runError = xpcall(chunk, function(err)
-            return tostring(err) .. "\n" .. tostring(debug and debug.traceback and debug.traceback() or "")
+        local runOk, runErr = xpcall(fn, function(e)
+            return tostring(e) .. "\n" .. tostring(debug and debug.traceback and debug.traceback() or "")
         end)
         if not runOk then
-            warn("[Preloader] " .. tostring(runError))
-            return
+            warn("[Coroutine] " .. tostring(runErr))
         end
     end)
 end
 
-local parent = firstUiParent()
+cleanup()
+
+local parent = parentList()[1]
 if not parent then
-    warn("[Preloader] Could not find a GUI parent")
+    warn("[Coroutine] Could not find a GUI parent")
     return
 end
 
-cleanup()
-
 local gui = Instance.new("ScreenGui")
-gui.Name = "CoroutinePolsecKeyPreloader"
+gui.Name = "CoroutineKeyLoader"
 gui.ResetOnSpawn = false
 gui.IgnoreGuiInset = true
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.DisplayOrder = 2147483647
-pcall(function()
-    gui.ScreenInsets = Enum.ScreenInsets.None
-end)
-pcall(function()
-    gui.ClipToDeviceSafeArea = false
-end)
+pcall(function() gui.ScreenInsets = Enum.ScreenInsets.None end)
+pcall(function() gui.ClipToDeviceSafeArea = false end)
 gui.Parent = parent
-ACTIVE_GUI = gui
+guiRef = gui
 
 local frame = Instance.new("Frame")
 frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(0.5, 0.5)
 frame.Position = UDim2.new(0.5, 0, 0.5, 0)
-frame.Size = UDim2.new(0, 340, 0, 282)
+frame.Size = UDim2.new(0, 346, 0, 304)
 frame.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
 frame.BorderSizePixel = 0
 frame.Parent = gui
-makeCorner(frame, 10)
-makeStroke(frame, Color3.fromRGB(72, 86, 122), 0.15)
+corner(frame, 10)
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(72, 86, 122)
+stroke.Transparency = 0.15
+stroke.Thickness = 1
+stroke.Parent = frame
 
 local title = Instance.new("TextLabel")
-title.Name = "Title"
 title.BackgroundTransparency = 1
 title.Position = UDim2.new(0, 18, 0, 14)
 title.Size = UDim2.new(1, -36, 0, 30)
 title.Font = Enum.Font.GothamBold
-title.Text = tostring(PRELOADER_CONFIG.Title or "Coroutine Stand")
+title.Text = cfg.name
 title.TextColor3 = Color3.fromRGB(245, 248, 255)
 title.TextSize = 18
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent = frame
 
 local status = Instance.new("TextLabel")
-status.Name = "Status"
 status.BackgroundTransparency = 1
 status.Position = UDim2.new(0, 18, 0, 48)
 status.Size = UDim2.new(1, -36, 0, 34)
 status.Font = Enum.Font.Gotham
-status.Text = "Paste your Coroutine key."
+status.Text = "Paste your key, then choose a version."
 status.TextColor3 = Color3.fromRGB(155, 166, 190)
 status.TextSize = 13
-status.TextXAlignment = Enum.TextXAlignment.Left
 status.TextWrapped = true
+status.TextXAlignment = Enum.TextXAlignment.Left
 status.Parent = frame
 
 local input = Instance.new("TextBox")
@@ -342,39 +344,16 @@ input.PlaceholderColor3 = Color3.fromRGB(95, 105, 128)
 input.TextSize = 14
 input.TextXAlignment = Enum.TextXAlignment.Left
 input.Parent = frame
-makeCorner(input, 8)
+corner(input, 8)
+pad(input, 12)
 
-local inputPadding = Instance.new("UIPadding")
-inputPadding.PaddingLeft = UDim.new(0, 12)
-inputPadding.PaddingRight = UDim.new(0, 12)
-inputPadding.Parent = input
-
-local progressFrame = Instance.new("Frame")
-progressFrame.Name = "Progress"
-progressFrame.Position = UDim2.new(0, 18, 0, 146)
-progressFrame.Size = UDim2.new(1, -36, 0, 28)
-progressFrame.BackgroundTransparency = 1
-progressFrame.Parent = frame
-
-local progressTrack = Instance.new("Frame")
-progressTrack.Name = "Track"
-progressTrack.Position = UDim2.new(0, 0, 0, 18)
-progressTrack.Size = UDim2.new(1, 0, 0, 7)
-progressTrack.BackgroundColor3 = Color3.fromRGB(28, 33, 46)
-progressTrack.BorderSizePixel = 0
-progressTrack.Parent = progressFrame
-makeCorner(progressTrack, 5)
-
-progressFill = Instance.new("Frame")
-progressFill.Name = "Fill"
-progressFill.Size = UDim2.new(0, 0, 1, 0)
-progressFill.BackgroundColor3 = Color3.fromRGB(46, 118, 255)
-progressFill.BorderSizePixel = 0
-progressFill.Parent = progressTrack
-makeCorner(progressFill, 5)
+local progress = Instance.new("Frame")
+progress.BackgroundTransparency = 1
+progress.Position = UDim2.new(0, 18, 0, 146)
+progress.Size = UDim2.new(1, -36, 0, 28)
+progress.Parent = frame
 
 progressText = Instance.new("TextLabel")
-progressText.Name = "Text"
 progressText.BackgroundTransparency = 1
 progressText.Position = UDim2.new(0, 0, 0, 0)
 progressText.Size = UDim2.new(1, 0, 0, 14)
@@ -383,61 +362,72 @@ progressText.Text = "Ready"
 progressText.TextColor3 = Color3.fromRGB(120, 132, 158)
 progressText.TextSize = 11
 progressText.TextXAlignment = Enum.TextXAlignment.Left
-progressText.Parent = progressFrame
+progressText.Parent = progress
 
-local loadButton = Instance.new("TextButton")
-loadButton.Name = "Load"
-loadButton.Position = UDim2.new(0, 18, 0, 184)
-loadButton.Size = UDim2.new(1, -36, 0, 42)
-loadButton.BackgroundColor3 = Color3.fromRGB(46, 118, 255)
-loadButton.BorderSizePixel = 0
-loadButton.Font = Enum.Font.GothamBold
-loadButton.Text = "Load"
-loadButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-loadButton.TextSize = 14
-loadButton.Parent = frame
-makeCorner(loadButton, 8)
+local trackBar = Instance.new("Frame")
+trackBar.Position = UDim2.new(0, 0, 0, 18)
+trackBar.Size = UDim2.new(1, 0, 0, 7)
+trackBar.BackgroundColor3 = Color3.fromRGB(28, 33, 46)
+trackBar.BorderSizePixel = 0
+trackBar.Parent = progress
+corner(trackBar, 5)
+
+progressFill = Instance.new("Frame")
+progressFill.Size = UDim2.new(0, 0, 1, 0)
+progressFill.BackgroundColor3 = Color3.fromRGB(46, 118, 255)
+progressFill.BorderSizePixel = 0
+progressFill.Parent = trackBar
+corner(progressFill, 5)
+
+local freeButton = Instance.new("TextButton")
+freeButton.Position = UDim2.new(0, 18, 0, 188)
+freeButton.Size = UDim2.new(0.5, -23, 0, 42)
+freeButton.BackgroundColor3 = Color3.fromRGB(46, 118, 255)
+freeButton.BorderSizePixel = 0
+freeButton.Font = Enum.Font.GothamBold
+freeButton.Text = "Free"
+freeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+freeButton.TextSize = 14
+freeButton.Parent = frame
+corner(freeButton, 8)
+
+local premiumButton = Instance.new("TextButton")
+premiumButton.Position = UDim2.new(0.5, 5, 0, 188)
+premiumButton.Size = UDim2.new(0.5, -23, 0, 42)
+premiumButton.BackgroundColor3 = Color3.fromRGB(125, 78, 255)
+premiumButton.BorderSizePixel = 0
+premiumButton.Font = Enum.Font.GothamBold
+premiumButton.Text = "Premium"
+premiumButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+premiumButton.TextSize = 14
+premiumButton.Parent = frame
+corner(premiumButton, 8)
 
 local getKeyButton = Instance.new("TextButton")
-getKeyButton.Name = "GetKey"
-getKeyButton.Position = UDim2.new(0, 18, 0, 234)
-getKeyButton.Size = UDim2.new(1, -36, 0, 34)
+getKeyButton.Position = UDim2.new(0, 18, 0, 244)
+getKeyButton.Size = UDim2.new(1, -36, 0, 36)
 getKeyButton.BackgroundColor3 = Color3.fromRGB(28, 33, 46)
 getKeyButton.BorderSizePixel = 0
 getKeyButton.Font = Enum.Font.GothamSemibold
-getKeyButton.Text = "Copy Get Key Link"
+getKeyButton.Text = "Copy Free Key Link"
 getKeyButton.TextColor3 = Color3.fromRGB(230, 235, 248)
 getKeyButton.TextSize = 13
 getKeyButton.Parent = frame
-makeCorner(getKeyButton, 8)
+corner(getKeyButton, 8)
 
-track(loadButton.Activated:Connect(function()
-    local key = trim(input.Text)
-    if key == "" then
-        status.Text = "Enter the key Polsec generated first."
-        status.TextColor3 = Color3.fromRGB(255, 195, 105)
-        setProgress(0, "Waiting")
-        return
-    end
+track(freeButton.Activated:Connect(function()
+    runScript("free", status)
+end))
 
-    publishKey(key)
-    status.Text = "Key saved."
-    status.TextColor3 = Color3.fromRGB(105, 235, 150)
-    loadPolsecOnlyLoader(status)
+track(premiumButton.Activated:Connect(function()
+    runScript("premium", status)
 end))
 
 track(getKeyButton.Activated:Connect(function()
-    local url = trim(PRELOADER_CONFIG.FreeKeyUrl)
-    if isPlaceholder(url) then
-        status.Text = "Get-key URL is not set."
-        status.TextColor3 = Color3.fromRGB(255, 195, 105)
-        return
-    end
-
-    if copyText(url) then
-        status.Text = "Get-key link copied."
+    if copy(cfg.getKey) then
+        status.Text = "Free key link copied."
     else
-        status.Text = url
+        status.Text = cfg.getKey
     end
     status.TextColor3 = Color3.fromRGB(145, 220, 255)
 end))
