@@ -1,21 +1,14 @@
 -- ============================================================
--- POLSEC-ONLY STAND LOADER
+-- COROUTINE STAND KEY PRELOADER
 -- ============================================================
--- This loader only executes the Polsec hosted script.
--- Keep the old loader file separate if you still want the legacy GitHub path.
+-- This small UI asks for a Polsec key, stores it globally, then loads
+-- loader_polsec_only.txt from your hosted raw URL.
 -- ============================================================
 
-local LOADER_CONFIG = {
-    MainUsername = "", -- Optional: set this to skip the player selector.
-    PolsecScriptUrl = "https://api.getpolsec.com/scripts/hosted/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb.lua",
-    -- Public users should set _G.Key or _G.script_key before running this loader.
-    -- Free keys come from this Polsec/LootLabs page.
-    PolsecKey = "",
+local PRELOADER_CONFIG = {
+    LoaderUrl = "https://raw.githubusercontent.com/MunkeyHacker/ecfjxzsycgi/refs/heads/main/loader_polsec_only.txt",
     FreeKeyUrl = "https://getpolsec.com/ad/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb",
-    PremiumKeyCheckUrl = "https://raw.githubusercontent.com/MunkeyHacker/dddddddssscccXXJk_s/refs/heads/main/ke%20ys",
-    -- Polsec validates the key. Keep this false unless your hosted Polsec wrapper exposes checkintegrity().
-    RequirePolsecIntegrity = false,
-    RefreshInterval = 2,
+    Title = "Coroutine Stand",
 }
 
 if not game:IsLoaded() then
@@ -51,7 +44,27 @@ local function getEnvironment()
     return _G
 end
 
-local STAND_ENV = getEnvironment()
+local ENV = getEnvironment()
+local ACTIVE_GUI = nil
+
+local STAND = rawget(ENV or {}, "STAND")
+if type(STAND) ~= "table" then
+    STAND = {}
+end
+STAND.UI = type(STAND.UI) == "table" and STAND.UI or {}
+STAND.UI.KeyPreloader = type(STAND.UI.KeyPreloader) == "table" and STAND.UI.KeyPreloader or {}
+ENV.STAND = STAND
+_G.STAND = STAND
+
+local connections = {}
+
+local function disconnect(connection)
+    if connection and typeof(connection) == "RBXScriptConnection" then
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+end
 
 local function getUiParents()
     local parents = {}
@@ -79,68 +92,44 @@ local function getUiParents()
     return parents
 end
 
-local function firstUiParent()
-    local parents = getUiParents()
-    return parents[1]
-end
-
-local STAND = rawget(STAND_ENV or {}, "STAND")
-if type(STAND) ~= "table" then
-    STAND = {}
-end
-STAND.Config = type(STAND.Config) == "table" and STAND.Config or {}
-STAND.State = type(STAND.State) == "table" and STAND.State or {}
-STAND.UI = type(STAND.UI) == "table" and STAND.UI or {}
-STAND.UI.PolsecLoader = type(STAND.UI.PolsecLoader) == "table" and STAND.UI.PolsecLoader or {}
-
-STAND_ENV.STAND = STAND
-_G.STAND = STAND
-
-if type(STAND.UI.PolsecLoader.Cleanup) == "function" then
-    pcall(STAND.UI.PolsecLoader.Cleanup)
-end
-
-local loaderConnections = {}
-STAND.UI.PolsecLoader.Connections = loaderConnections
-STAND.State.PolsecLoaderRunToken = tostring(os.clock()) .. ":" .. tostring(math.random(100000, 999999))
-local LOADER_RUN_TOKEN = STAND.State.PolsecLoaderRunToken
-
-local function isCurrentLoaderRun()
-    return STAND.State.PolsecLoaderRunToken == LOADER_RUN_TOKEN
-end
-
-local function disconnectConnection(connection)
-    if connection and typeof(connection) == "RBXScriptConnection" then
-        pcall(function()
-            connection:Disconnect()
-        end)
+local function cleanup()
+    for _, connection in ipairs(connections) do
+        disconnect(connection)
     end
-end
+    connections = {}
 
-local function cleanupLoaderUi()
-    for _, connection in ipairs(loaderConnections) do
-        disconnectConnection(connection)
-    end
-    loaderConnections = {}
-    STAND.UI.PolsecLoader.Connections = loaderConnections
+    pcall(function()
+        if ACTIVE_GUI and ACTIVE_GUI.Parent then
+            ACTIVE_GUI:Destroy()
+        end
+    end)
+    ACTIVE_GUI = nil
 
     for _, parent in ipairs(getUiParents()) do
         pcall(function()
-            local selector = parent:FindFirstChild("StandPolsecMainSelector")
-            if selector then selector:Destroy() end
-            local statusGui = parent:FindFirstChild("StandPolsecLoaderStatus")
-            if statusGui then statusGui:Destroy() end
+            local oldGui = parent:FindFirstChild("CoroutinePolsecKeyPreloader")
+            if oldGui then oldGui:Destroy() end
+            oldGui = parent:FindFirstChild("StandPolsecKeyPreloader")
+            if oldGui then oldGui:Destroy() end
         end)
     end
 end
 
-STAND.UI.PolsecLoader.Cleanup = cleanupLoaderUi
+if type(STAND.UI.KeyPreloader.Cleanup) == "function" then
+    pcall(STAND.UI.KeyPreloader.Cleanup)
+end
+STAND.UI.KeyPreloader.Cleanup = cleanup
 
-local function trackConnection(connection)
+local function track(connection)
     if connection and typeof(connection) == "RBXScriptConnection" then
-        table.insert(loaderConnections, connection)
+        table.insert(connections, connection)
     end
     return connection
+end
+
+local function firstUiParent()
+    local parents = getUiParents()
+    return parents[1]
 end
 
 local function makeCorner(parent, radius)
@@ -152,311 +141,29 @@ end
 
 local function makeStroke(parent, color, transparency)
     local stroke = Instance.new("UIStroke")
-    stroke.Color = color or Color3.fromRGB(80, 90, 120)
-    stroke.Transparency = transparency or 0.3
+    stroke.Color = color or Color3.fromRGB(76, 92, 130)
+    stroke.Transparency = transparency or 0.2
     stroke.Thickness = 1
     stroke.Parent = parent
     return stroke
 end
 
-local function removeOldSelector()
-    for _, parent in ipairs(getUiParents()) do
-        pcall(function()
-            local oldGui = parent:FindFirstChild("StandPolsecMainSelector")
-            if oldGui then oldGui:Destroy() end
-        end)
-    end
-end
-
-local function configuredMainUsername()
-    local envName = STAND_ENV and (rawget(STAND_ENV, "MainUsername") or rawget(STAND_ENV, "MAIN_USERNAME"))
-    local globalName = rawget(_G, "MainUsername") or rawget(_G, "MAIN_USERNAME")
-    return trim(envName or globalName or LOADER_CONFIG.MainUsername or "")
-end
-
-local function getFreshPlayers()
-    local result = {}
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player and player.Parent == Players then
-            table.insert(result, player)
-        end
-    end
-    table.sort(result, function(a, b)
-        return tostring(a.Name):lower() < tostring(b.Name):lower()
-    end)
-    return result
-end
-
-local function waitForMainUserSelection()
-    local configuredName = configuredMainUsername()
-    if configuredName ~= "" then
-        return configuredName
-    end
-
-    removeOldSelector()
-
-    local parent = firstUiParent()
-    if not parent then
-        return ""
-    end
-
-    local selectedMainUsername = nil
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "StandPolsecMainSelector"
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.DisplayOrder = 2147483647
-    pcall(function()
-        gui.ScreenInsets = Enum.ScreenInsets.None
-    end)
-    pcall(function()
-        gui.ClipToDeviceSafeArea = false
-    end)
-    gui.Parent = parent
-
-    local frame = Instance.new("Frame")
-    frame.Name = "Panel"
-    frame.AnchorPoint = Vector2.new(0.5, 0.5)
-    frame.Position = UDim2.new(0.5, 0, 0.5, 0)
-    frame.Size = UDim2.new(0, 340, 0, 390)
-    frame.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
-    frame.BorderSizePixel = 0
-    frame.Parent = gui
-    makeCorner(frame, 10)
-    makeStroke(frame, Color3.fromRGB(72, 86, 122), 0.15)
-
-    local title = Instance.new("TextLabel")
-    title.Name = "Title"
-    title.BackgroundTransparency = 1
-    title.Position = UDim2.new(0, 18, 0, 14)
-    title.Size = UDim2.new(1, -36, 0, 30)
-    title.Font = Enum.Font.GothamBold
-    title.Text = "Select Main User"
-    title.TextColor3 = Color3.fromRGB(245, 248, 255)
-    title.TextSize = 18
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = frame
-
-    local status = Instance.new("TextLabel")
-    status.Name = "Status"
-    status.BackgroundTransparency = 1
-    status.Position = UDim2.new(0, 18, 0, 46)
-    status.Size = UDim2.new(1, -36, 0, 28)
-    status.Font = Enum.Font.Gotham
-    status.Text = "Pick the account that commands this alt."
-    status.TextColor3 = Color3.fromRGB(155, 166, 190)
-    status.TextSize = 13
-    status.TextXAlignment = Enum.TextXAlignment.Left
-    status.TextWrapped = true
-    status.Parent = frame
-
-    local scroll = Instance.new("ScrollingFrame")
-    scroll.Name = "Players"
-    scroll.Position = UDim2.new(0, 18, 0, 86)
-    scroll.Size = UDim2.new(1, -36, 1, -108)
-    scroll.BackgroundColor3 = Color3.fromRGB(12, 15, 22)
-    scroll.BorderSizePixel = 0
-    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-    scroll.ScrollBarThickness = 4
-    scroll.Parent = frame
-    makeCorner(scroll, 8)
-
-    local layout = Instance.new("UIListLayout")
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 6)
-    layout.Parent = scroll
-
-    local padding = Instance.new("UIPadding")
-    padding.PaddingTop = UDim.new(0, 8)
-    padding.PaddingBottom = UDim.new(0, 8)
-    padding.PaddingLeft = UDim.new(0, 8)
-    padding.PaddingRight = UDim.new(0, 8)
-    padding.Parent = scroll
-
-    local function clearButtons()
-        for _, child in ipairs(scroll:GetChildren()) do
-            if child:IsA("TextButton") then
-                child:Destroy()
-            end
-        end
-    end
-
-    local function selectPlayer(player)
-        if not player or player.Parent ~= Players then
-            return
-        end
-        selectedMainUsername = player.Name
-        status.TextColor3 = Color3.fromRGB(105, 235, 150)
-        status.Text = "Selected " .. player.Name
-        pcall(function()
-            gui:Destroy()
-        end)
-    end
-
-    local function refreshList()
-        if not isCurrentLoaderRun() or not gui.Parent then
-            return
-        end
-
-        clearButtons()
-        local players = getFreshPlayers()
-        for index, player in ipairs(players) do
-            local button = Instance.new("TextButton")
-            button.Name = "Player_" .. tostring(player.UserId)
-            button.Size = UDim2.new(1, -2, 0, 42)
-            button.BackgroundColor3 = player == LocalPlayer and Color3.fromRGB(40, 46, 64) or Color3.fromRGB(25, 30, 42)
-            button.BorderSizePixel = 0
-            button.AutoButtonColor = true
-            button.Font = Enum.Font.GothamSemibold
-            button.TextSize = 14
-            button.TextColor3 = Color3.fromRGB(245, 245, 248)
-            button.TextXAlignment = Enum.TextXAlignment.Left
-            button.TextTruncate = Enum.TextTruncate.AtEnd
-            button.Text = "  " .. player.Name .. (player.DisplayName ~= player.Name and ("  (" .. player.DisplayName .. ")") or "")
-            button.LayoutOrder = index
-            button.Parent = scroll
-            makeCorner(button, 7)
-            trackConnection(button.Activated:Connect(function()
-                selectPlayer(player)
-            end))
-        end
-
-        scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 18)
-        status.TextColor3 = Color3.fromRGB(140, 210, 255)
-        status.Text = "Players online: " .. tostring(#players)
-    end
-
-    trackConnection(layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 18)
-    end))
-    trackConnection(Players.PlayerAdded:Connect(refreshList))
-    trackConnection(Players.PlayerRemoving:Connect(refreshList))
-
-    refreshList()
-    task.spawn(function()
-        local interval = tonumber(LOADER_CONFIG.RefreshInterval) or 2
-        while isCurrentLoaderRun() and gui.Parent and not selectedMainUsername do
-            task.wait(interval)
-            refreshList()
-        end
-    end)
-
-    repeat task.wait() until selectedMainUsername or not gui.Parent or not isCurrentLoaderRun()
-    return trim(selectedMainUsername or "")
-end
-
-local function showLoaderStatus(text, isError)
-    local parent = firstUiParent()
-    if not parent then
-        return nil, nil
-    end
-
-    for _, guiParent in ipairs(getUiParents()) do
-        pcall(function()
-            local oldGui = guiParent:FindFirstChild("StandPolsecLoaderStatus")
-            if oldGui then oldGui:Destroy() end
-        end)
-    end
-
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "StandPolsecLoaderStatus"
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.DisplayOrder = 2147483647
-    pcall(function()
-        gui.ScreenInsets = Enum.ScreenInsets.None
-    end)
-    pcall(function()
-        gui.ClipToDeviceSafeArea = false
-    end)
-    gui.Parent = parent
-
-    local label = Instance.new("TextLabel")
-    label.Name = "Text"
-    label.AnchorPoint = Vector2.new(0.5, 0)
-    label.Position = UDim2.new(0.5, 0, 0, 14)
-    label.Size = UDim2.new(0, 360, 0, 52)
-    label.BackgroundColor3 = isError and Color3.fromRGB(55, 16, 20) or Color3.fromRGB(18, 22, 30)
-    label.BackgroundTransparency = 0.05
-    label.BorderSizePixel = 0
-    label.Font = Enum.Font.GothamSemibold
-    label.Text = tostring(text or "Loading")
-    label.TextColor3 = Color3.fromRGB(235, 242, 255)
-    label.TextSize = 13
-    label.TextWrapped = true
-    label.Parent = gui
-    makeCorner(label, 8)
-    return gui, label
-end
-
-local function normalizeKey(value)
-    return trim(value):gsub("%s+", ""):lower()
-end
-
-local function resolvePolsecKey()
-    local envKey = STAND_ENV and (rawget(STAND_ENV, "script_key") or rawget(STAND_ENV, "Key") or rawget(STAND_ENV, "KEY"))
+local function currentKey()
+    local envKey = ENV and (rawget(ENV, "script_key") or rawget(ENV, "Key") or rawget(ENV, "KEY"))
     local globalKey = rawget(_G, "script_key") or rawget(_G, "Key") or rawget(_G, "KEY")
-    return trim(envKey or globalKey or LOADER_CONFIG.PolsecKey or "")
+    return trim(envKey or globalKey or "")
 end
 
-local function fetchText(url)
-    url = trim(url)
-    if isPlaceholder(url) then
-        return nil
-    end
-
-    local ok, body = pcall(function()
-        return game:HttpGet(url)
-    end)
-    if ok and type(body) == "string" and body ~= "" then
-        return body
-    end
-    return nil
-end
-
-local function responseContainsKey(key, response)
-    local wanted = normalizeKey(key)
-    if wanted == "" then
-        return false
-    end
-
-    response = tostring(response or "")
-    for line in response:gmatch("[^\r\n]+") do
-        local cleanLine = line:gsub("%-%-.*$", "")
-        for entry in cleanLine:gmatch("[^,;%s]+") do
-            if normalizeKey(entry) == wanted then
-                return true
-            end
-        end
-        for token in cleanLine:gmatch("[%w_%-]+") do
-            if normalizeKey(token) == wanted then
-                return true
-            end
-        end
-    end
-    return normalizeKey(response) == wanted
-end
-
-local function resolvePolsecTier(key)
-    local premiumBody = fetchText(LOADER_CONFIG.PremiumKeyCheckUrl)
-    if premiumBody and responseContainsKey(key, premiumBody) then
-        return "premium"
-    end
-    return "free"
-end
-
-local function publishPolsecKey(key)
+local function publishKey(key)
     key = trim(key)
     if key == "" then
         return false
     end
 
-    if STAND_ENV then
-        STAND_ENV.script_key = key
-        STAND_ENV.Key = key
-        STAND_ENV.KEY = key
+    if ENV then
+        ENV.script_key = key
+        ENV.Key = key
+        ENV.KEY = key
     end
     pcall(function()
         script_key = key
@@ -467,134 +174,270 @@ local function publishPolsecKey(key)
     return true
 end
 
-local function publishConfig(mainUsername, keyTier, activeKey)
-    local cleanName = trim(mainUsername or "")
-    keyTier = tostring(keyTier or "free"):lower()
-    activeKey = trim(activeKey or "")
-
-    STAND.Config.MainUsername = cleanName
-    STAND.Config.mainUsername = cleanName
-    STAND.Config.DisableInternalKeySystem = true
-    STAND.Config.KeySystemEnabled = false
-    STAND.Config.SecurityProvider = "polsec"
-    STAND.Config.PolsecEnabled = true
-    STAND.Config.RequirePolsecIntegrity = LOADER_CONFIG.RequirePolsecIntegrity == true
-    STAND.Config.KeyTier = keyTier
-    STAND.Config.Key = activeKey
-    STAND.Config.key = activeKey
-    STAND.Config.FreeKeyUrl = LOADER_CONFIG.FreeKeyUrl
-
-    STAND.State.MainUsername = cleanName
-    STAND.State.CommandOwnerName = cleanName
-    STAND.State.LoaderSelectedAt = os.time()
-    STAND.State.SecurityProvider = "polsec"
-    STAND.State.PolsecEnabled = true
-    STAND.State.KeyTier = keyTier
-    STAND.State.PremiumAccess = keyTier == "premium"
-
-    STAND.UI.PolsecLoader.SelectedMainUsername = cleanName
-    STAND.UI.PolsecLoader.KeyTier = keyTier
-
-    STAND_ENV.STAND = STAND
-    STAND_ENV.STAND_LOADER_CONFIG = STAND.Config
-    STAND_ENV.MAIN_USERNAME = cleanName
-    STAND_ENV.MainUsername = cleanName
-    STAND_ENV.STAND_SECURITY_PROVIDER = "polsec"
-    STAND_ENV.STAND_KEY_TIER = keyTier
-    STAND_ENV.STAND_PREMIUM_ACCESS = keyTier == "premium"
-
-    _G.STAND = STAND
-    _G.STAND_LOADER_CONFIG = STAND.Config
-    _G.MAIN_USERNAME = cleanName
-    _G.MainUsername = cleanName
-    _G.STAND_SECURITY_PROVIDER = "polsec"
-    _G.STAND_KEY_TIER = keyTier
-    _G.STAND_PREMIUM_ACCESS = keyTier == "premium"
-end
-
-local function fetchPolsecScript()
-    local url = trim(LOADER_CONFIG.PolsecScriptUrl)
-    if isPlaceholder(url) then
-        return nil, "PolsecScriptUrl is not set"
-    end
-
-    local ok, body = pcall(function()
-        return game:HttpGet(url)
+local function copyText(value)
+    local ok = false
+    pcall(function()
+        if setclipboard then
+            setclipboard(value)
+            ok = true
+        end
     end)
-    if not ok then
-        return nil, tostring(body)
+    return ok
+end
+
+local progressFill = nil
+local progressText = nil
+local loadInProgress = false
+
+local function setProgress(value, text)
+    value = math.clamp(tonumber(value) or 0, 0, 1)
+    if progressFill then
+        progressFill:TweenSize(UDim2.new(value, 0, 1, 0), Enum.EasingDirection.Out, Enum.EasingStyle.Quad, 0.15, true)
     end
-    if type(body) ~= "string" or body == "" then
-        return nil, "Polsec returned an empty script"
+    if progressText and text then
+        progressText.Text = text
     end
-    return body, nil
 end
 
-local function runPolsecScript(source)
-    local chunk, compileError = loadstring(source)
-    if not chunk then
-        return false, compileError
+local function loadPolsecOnlyLoader(statusLabel)
+    if loadInProgress then
+        return
     end
 
-    local ok, runtimeError = xpcall(chunk, function(err)
-        return tostring(err) .. "\n" .. tostring(debug and debug.traceback and debug.traceback() or "")
-    end)
-    if not ok then
-        return false, runtimeError
+    local loaderUrl = trim(PRELOADER_CONFIG.LoaderUrl)
+    if isPlaceholder(loaderUrl) then
+        statusLabel.Text = "Upload loader_polsec_only.txt and paste its raw URL into LoaderUrl."
+        statusLabel.TextColor3 = Color3.fromRGB(255, 195, 105)
+        setProgress(0, "Waiting")
+        return
     end
-    return true, nil
-end
 
-local mainUsername = waitForMainUserSelection()
-if not isCurrentLoaderRun() then return end
-if mainUsername == "" then
-    warn("[PolsecLoader] No main user selected")
-    return
-end
+    loadInProgress = true
+    setProgress(0.12, "Preparing")
+    statusLabel.Text = "Loading..."
+    statusLabel.TextColor3 = Color3.fromRGB(145, 220, 255)
 
-local activeKey = resolvePolsecKey()
-local keyTier = "free"
-if activeKey ~= "" then
-    publishPolsecKey(activeKey)
-    keyTier = resolvePolsecTier(activeKey)
-end
-
-publishConfig(mainUsername, keyTier, activeKey)
-
-local statusText = "Selected " .. tostring(mainUsername) .. " - loading Polsec script"
-if activeKey ~= "" then
-    statusText = statusText .. " (" .. tostring(keyTier) .. ")"
-else
-    statusText = statusText .. " (Polsec will ask for key)"
-end
-local _, statusLabel = showLoaderStatus(statusText .. "...", false)
-local source, fetchError = fetchPolsecScript()
-if not source then
-    local message = "Loader failed: " .. tostring(fetchError)
-    warn("[PolsecLoader] " .. message)
-    showLoaderStatus(message, true)
-    return
-end
-
-if not isCurrentLoaderRun() then return end
-if statusLabel then
-    statusLabel.Text = "Polsec script downloaded - starting..."
-end
-
-local ok, runError = runPolsecScript(source)
-if not ok then
-    local message = "Loader failed: " .. tostring(runError)
-    warn("[PolsecLoader] " .. message)
-    showLoaderStatus(message, true)
-    return
-end
-
-if statusLabel then
-    statusLabel.Text = "Loaded Polsec script (" .. tostring(keyTier) .. ")"
-    task.delay(2, function()
-        pcall(function()
-            local gui = statusLabel:FindFirstAncestorOfClass("ScreenGui")
-            if gui then gui:Destroy() end
+    task.spawn(function()
+        setProgress(0.3, "Downloading")
+        local ok, sourceOrError = pcall(function()
+            return game:HttpGet(loaderUrl)
         end)
+        if not ok then
+            loadInProgress = false
+            setProgress(0, "Failed")
+            statusLabel.Text = "Could not download loader."
+            statusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
+            warn("[Preloader] " .. tostring(sourceOrError))
+            return
+        end
+
+        local source = tostring(sourceOrError or "")
+        if source == "" then
+            loadInProgress = false
+            setProgress(0, "Failed")
+            statusLabel.Text = "Loader download was empty."
+            statusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
+            return
+        end
+
+        setProgress(0.62, "Checking")
+        local chunk, compileError = loadstring(source)
+        if not chunk then
+            loadInProgress = false
+            setProgress(0, "Failed")
+            statusLabel.Text = "Loader compile failed."
+            statusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
+            warn("[Preloader] " .. tostring(compileError))
+            return
+        end
+
+        setProgress(0.88, "Starting")
+        statusLabel.Text = "Starting loader..."
+        task.wait(0.2)
+        setProgress(1, "Loaded")
+        task.wait(0.08)
+        cleanup()
+
+        local runOk, runError = xpcall(chunk, function(err)
+            return tostring(err) .. "\n" .. tostring(debug and debug.traceback and debug.traceback() or "")
+        end)
+        if not runOk then
+            warn("[Preloader] " .. tostring(runError))
+            return
+        end
     end)
 end
+
+local parent = firstUiParent()
+if not parent then
+    warn("[Preloader] Could not find a GUI parent")
+    return
+end
+
+cleanup()
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "CoroutinePolsecKeyPreloader"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.DisplayOrder = 2147483647
+pcall(function()
+    gui.ScreenInsets = Enum.ScreenInsets.None
+end)
+pcall(function()
+    gui.ClipToDeviceSafeArea = false
+end)
+gui.Parent = parent
+ACTIVE_GUI = gui
+
+local frame = Instance.new("Frame")
+frame.Name = "Panel"
+frame.AnchorPoint = Vector2.new(0.5, 0.5)
+frame.Position = UDim2.new(0.5, 0, 0.5, 0)
+frame.Size = UDim2.new(0, 340, 0, 282)
+frame.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
+frame.BorderSizePixel = 0
+frame.Parent = gui
+makeCorner(frame, 10)
+makeStroke(frame, Color3.fromRGB(72, 86, 122), 0.15)
+
+local title = Instance.new("TextLabel")
+title.Name = "Title"
+title.BackgroundTransparency = 1
+title.Position = UDim2.new(0, 18, 0, 14)
+title.Size = UDim2.new(1, -36, 0, 30)
+title.Font = Enum.Font.GothamBold
+title.Text = tostring(PRELOADER_CONFIG.Title or "Coroutine Stand")
+title.TextColor3 = Color3.fromRGB(245, 248, 255)
+title.TextSize = 18
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = frame
+
+local status = Instance.new("TextLabel")
+status.Name = "Status"
+status.BackgroundTransparency = 1
+status.Position = UDim2.new(0, 18, 0, 48)
+status.Size = UDim2.new(1, -36, 0, 34)
+status.Font = Enum.Font.Gotham
+status.Text = "Paste your Coroutine key."
+status.TextColor3 = Color3.fromRGB(155, 166, 190)
+status.TextSize = 13
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.TextWrapped = true
+status.Parent = frame
+
+local input = Instance.new("TextBox")
+input.Name = "KeyInput"
+input.Position = UDim2.new(0, 18, 0, 90)
+input.Size = UDim2.new(1, -36, 0, 44)
+input.BackgroundColor3 = Color3.fromRGB(12, 15, 22)
+input.BorderSizePixel = 0
+input.ClearTextOnFocus = false
+input.Font = Enum.Font.GothamSemibold
+input.PlaceholderText = "Coroutine key"
+input.Text = currentKey()
+input.TextColor3 = Color3.fromRGB(245, 245, 248)
+input.PlaceholderColor3 = Color3.fromRGB(95, 105, 128)
+input.TextSize = 14
+input.TextXAlignment = Enum.TextXAlignment.Left
+input.Parent = frame
+makeCorner(input, 8)
+
+local inputPadding = Instance.new("UIPadding")
+inputPadding.PaddingLeft = UDim.new(0, 12)
+inputPadding.PaddingRight = UDim.new(0, 12)
+inputPadding.Parent = input
+
+local progressFrame = Instance.new("Frame")
+progressFrame.Name = "Progress"
+progressFrame.Position = UDim2.new(0, 18, 0, 146)
+progressFrame.Size = UDim2.new(1, -36, 0, 28)
+progressFrame.BackgroundTransparency = 1
+progressFrame.Parent = frame
+
+local progressTrack = Instance.new("Frame")
+progressTrack.Name = "Track"
+progressTrack.Position = UDim2.new(0, 0, 0, 18)
+progressTrack.Size = UDim2.new(1, 0, 0, 7)
+progressTrack.BackgroundColor3 = Color3.fromRGB(28, 33, 46)
+progressTrack.BorderSizePixel = 0
+progressTrack.Parent = progressFrame
+makeCorner(progressTrack, 5)
+
+progressFill = Instance.new("Frame")
+progressFill.Name = "Fill"
+progressFill.Size = UDim2.new(0, 0, 1, 0)
+progressFill.BackgroundColor3 = Color3.fromRGB(46, 118, 255)
+progressFill.BorderSizePixel = 0
+progressFill.Parent = progressTrack
+makeCorner(progressFill, 5)
+
+progressText = Instance.new("TextLabel")
+progressText.Name = "Text"
+progressText.BackgroundTransparency = 1
+progressText.Position = UDim2.new(0, 0, 0, 0)
+progressText.Size = UDim2.new(1, 0, 0, 14)
+progressText.Font = Enum.Font.Gotham
+progressText.Text = "Ready"
+progressText.TextColor3 = Color3.fromRGB(120, 132, 158)
+progressText.TextSize = 11
+progressText.TextXAlignment = Enum.TextXAlignment.Left
+progressText.Parent = progressFrame
+
+local loadButton = Instance.new("TextButton")
+loadButton.Name = "Load"
+loadButton.Position = UDim2.new(0, 18, 0, 184)
+loadButton.Size = UDim2.new(1, -36, 0, 42)
+loadButton.BackgroundColor3 = Color3.fromRGB(46, 118, 255)
+loadButton.BorderSizePixel = 0
+loadButton.Font = Enum.Font.GothamBold
+loadButton.Text = "Load"
+loadButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+loadButton.TextSize = 14
+loadButton.Parent = frame
+makeCorner(loadButton, 8)
+
+local getKeyButton = Instance.new("TextButton")
+getKeyButton.Name = "GetKey"
+getKeyButton.Position = UDim2.new(0, 18, 0, 234)
+getKeyButton.Size = UDim2.new(1, -36, 0, 34)
+getKeyButton.BackgroundColor3 = Color3.fromRGB(28, 33, 46)
+getKeyButton.BorderSizePixel = 0
+getKeyButton.Font = Enum.Font.GothamSemibold
+getKeyButton.Text = "Copy Get Key Link"
+getKeyButton.TextColor3 = Color3.fromRGB(230, 235, 248)
+getKeyButton.TextSize = 13
+getKeyButton.Parent = frame
+makeCorner(getKeyButton, 8)
+
+track(loadButton.Activated:Connect(function()
+    local key = trim(input.Text)
+    if key == "" then
+        status.Text = "Enter the key Polsec generated first."
+        status.TextColor3 = Color3.fromRGB(255, 195, 105)
+        setProgress(0, "Waiting")
+        return
+    end
+
+    publishKey(key)
+    status.Text = "Key saved."
+    status.TextColor3 = Color3.fromRGB(105, 235, 150)
+    loadPolsecOnlyLoader(status)
+end))
+
+track(getKeyButton.Activated:Connect(function()
+    local url = trim(PRELOADER_CONFIG.FreeKeyUrl)
+    if isPlaceholder(url) then
+        status.Text = "Get-key URL is not set."
+        status.TextColor3 = Color3.fromRGB(255, 195, 105)
+        return
+    end
+
+    if copyText(url) then
+        status.Text = "Get-key link copied."
+    else
+        status.Text = url
+    end
+    status.TextColor3 = Color3.fromRGB(145, 220, 255)
+end))
