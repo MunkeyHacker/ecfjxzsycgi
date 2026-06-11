@@ -3,6 +3,9 @@ local cfg = {
     freeScript = "https://api.getpolsec.com/scripts/hosted/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb.lua",
     premiumScript = "https://api.getpolsec.com/scripts/hosted/170922bf810a59c5580e9ada89e5ce022e5f9a6addc3d04a91dcb7deb90353ef.lua",
     getKey = "https://getpolsec.com/ad/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb",
+    premium = {
+        ["708391294:851850015:190435441"] = true,
+    },
 }
 
 if not game:IsLoaded() then
@@ -129,6 +132,24 @@ local function currentKey()
     return trim((env and (rawget(env, "script_key") or rawget(env, "Key") or rawget(env, "KEY"))) or rawget(_G, "script_key") or rawget(_G, "Key") or rawget(_G, "KEY"))
 end
 
+local function keyMark(key)
+    key = trim(key):gsub("%s+", ""):lower()
+    local h1, h2, h3 = 17, 29, 43
+
+    for i = 1, #key do
+        local b = string.byte(key, i)
+        h1 = (h1 * 131 + b) % 1000000007
+        h2 = (h2 * 137 + b) % 1000000009
+        h3 = (h3 * 149 + b) % 1000000033
+    end
+
+    return tostring(h1) .. ":" .. tostring(h2) .. ":" .. tostring(h3)
+end
+
+local function keyTier(key)
+    return cfg.premium[keyMark(key)] and "premium" or "free"
+end
+
 local function saveKey(key)
     key = trim(key)
     if key == "" then return false end
@@ -202,26 +223,6 @@ local function copy(text)
     return ok
 end
 
-local function hasStarted()
-    local stand = rawget(env or {}, "STAND") or rawget(_G, "STAND")
-    if type(stand) == "table" and type(stand.State) == "table" and stand.State.Alive == true then
-        return true
-    end
-
-    for _, parent in ipairs(parentList()) do
-        local found = false
-        pcall(function()
-            found = parent:FindFirstChild("CoroutineMainUserSelect") ~= nil
-                or parent:FindFirstChild("StandMainUserSelect") ~= nil
-        end)
-        if found then
-            return true
-        end
-    end
-
-    return false
-end
-
 local function download(url)
     local ok, body = pcall(function()
         return game:HttpGet(url)
@@ -244,53 +245,17 @@ local function download(url)
     return fn, nil
 end
 
-local function startTier(tier, fn, key, cleanFirst)
+local function startTier(tier, fn, key)
     saveState(tier, key)
-    if cleanFirst then
-        setProgress(1, "Loaded")
-        task.wait(0.12)
-        cleanup()
+    setProgress(1, tier == "premium" and "Premium" or "Free")
+    task.wait(0.12)
+    cleanup()
 
-        local ok, err = xpcall(fn, function(e)
-            return tostring(e) .. "\n" .. tostring(debug and debug.traceback and debug.traceback() or "")
-        end)
-
-        return ok, err, hasStarted()
-    end
-
-    local finished = false
-    local runOk = false
-    local runErr = nil
-
-    task.spawn(function()
-        runOk, runErr = xpcall(fn, function(e)
-            return tostring(e) .. "\n" .. tostring(debug and debug.traceback and debug.traceback() or "")
-        end)
-        finished = true
+    local ok, err = xpcall(fn, function(e)
+        return tostring(e) .. "\n" .. tostring(debug and debug.traceback and debug.traceback() or "")
     end)
 
-    local started = false
-    local stopAt = time() + 3
-    while time() < stopAt do
-        if hasStarted() then
-            started = true
-            break
-        end
-        if finished then
-            break
-        end
-        task.wait(0.05)
-    end
-
-    if started then
-        return true, nil, true
-    end
-
-    if finished then
-        return runOk, runErr, false
-    end
-
-    return false, "no start signal", false
+    return ok, err
 end
 
 local function runScript(status)
@@ -304,47 +269,30 @@ local function runScript(status)
         return
     end
 
+    local tier = keyTier(key)
+    local url = tier == "premium" and cfg.premiumScript or cfg.freeScript
+
     busy = true
     saveKey(key)
-    saveState("free", key)
+    saveState(tier, key)
 
-    status.Text = "Checking key..."
+    status.Text = tier == "premium" and "Premium key found." or "Checking free key..."
     status.TextColor3 = Color3.fromRGB(145, 220, 255)
     setProgress(0.2, "Connecting")
 
     task.spawn(function()
-        setProgress(0.38, "Trying premium")
-        local premiumFn, premiumErr = download(cfg.premiumScript)
-        if premiumFn then
-            saveState("premium", key)
-            local runOk, runErr, started = startTier("premium", premiumFn, key, false)
-            if started then
-                setProgress(1, "Premium")
-                task.wait(0.12)
-                cleanup()
-                return
-            elseif runOk then
-                warn("[Coroutine] premium returned without starting")
-            else
-                warn("[Coroutine] premium rejected: " .. tostring(runErr))
-            end
-        else
-            warn("[Coroutine] premium load failed: " .. tostring(premiumErr))
-        end
-
-        setProgress(0.68, "Trying free")
-        status.Text = "Trying free..."
-        local freeFn, freeErr = download(cfg.freeScript)
-        if not freeFn then
+        setProgress(0.55, "Downloading")
+        local fn, err = download(url)
+        if not fn then
             busy = false
             status.Text = "Load failed."
             status.TextColor3 = Color3.fromRGB(255, 120, 120)
             setProgress(0, "Failed")
-            warn("[Coroutine] free load failed: " .. tostring(freeErr))
+            warn("[Coroutine] " .. tostring(err))
             return
         end
 
-        local runOk, runErr = startTier("free", freeFn, key, true)
+        local runOk, runErr = startTier(tier, fn, key)
         if not runOk then
             warn("[Coroutine] " .. tostring(runErr))
         end
