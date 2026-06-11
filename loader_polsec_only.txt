@@ -13,7 +13,8 @@ local LOADER_CONFIG = {
     PolsecKey = "",
     FreeKeyUrl = "https://getpolsec.com/ad/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb",
     PremiumKeyCheckUrl = "https://raw.githubusercontent.com/MunkeyHacker/dddddddssscccXXJk_s/refs/heads/main/ke%20ys",
-    RequirePolsecIntegrity = true,
+    -- Polsec validates the key. Keep this false unless your hosted Polsec wrapper exposes checkintegrity().
+    RequirePolsecIntegrity = false,
     RefreshInterval = 2,
 }
 
