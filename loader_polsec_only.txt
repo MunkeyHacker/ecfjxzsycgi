@@ -4,9 +4,14 @@ local cfg = {
     publicKey = "59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d",
     getKey = "https://getpolsec.com/ad/59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d",
     premiumListScript = "https://api.getpolsec.com/scripts/hosted/80e2736dd1f1384d6c370e9394a0e7b26e164b207471d3358c167955f2281393.lua",
+    premiumListFallback = "https://raw.githubusercontent.com/MunkeyHacker/ecfjxzsycgi/refs/heads/main/premium_key_list_obfuscated.txt",
+    premiumScript = "https://raw.githubusercontent.com/MunkeyHacker/ecfjxzsycgi/refs/heads/main/obfuscated_polsec_merged.txt",
     requireMergedKeyForFree = true,
     requireMergedKeyForPremium = false,
     executePremiumListWrapper = false,
+    premiumFingerprints = {
+        ["795254271:496447317:484942475"] = { duration = "never" },
+    },
 }
 
 if not game:IsLoaded() then
@@ -41,13 +46,17 @@ STAND.Config.SecurityProvider = "polsec"
 STAND.Config.PolsecEnabled = true
 STAND.Config.FreeKeyUrl = cfg.getKey
 STAND.Config.HostedScriptUrl = cfg.script
+STAND.Config.PremiumScriptUrl = cfg.premiumScript
 STAND.Config.PremiumKeyListUrl = cfg.premiumListScript ~= "" and cfg.premiumListScript or STAND.Config.PremiumKeyListUrl
+STAND.Config.PremiumKeyListFallbackUrl = cfg.premiumListFallback
 STAND.Security.BuildName = STAND.Security.BuildName or cfg.name
 STAND.Security.BuildVersion = STAND.Security.BuildVersion or "loader-ui-5.52.1"
 STAND.Security.PublicLoader = true
 STAND.Security.LoaderRole = "polsec-ui"
 STAND.Security.HostedScriptUrl = cfg.script
+STAND.Security.PremiumScriptUrl = cfg.premiumScript
 STAND.Security.PremiumKeyListUrl = cfg.premiumListScript ~= "" and cfg.premiumListScript or STAND.Security.PremiumKeyListUrl
+STAND.Security.PremiumKeyListFallbackUrl = cfg.premiumListFallback
 STAND.Cache.LoaderStartedAt = STAND.Cache.LoaderStartedAt or os.time()
 if env then
     env.STAND = STAND
@@ -305,11 +314,41 @@ local function premiumDurationSeconds(value)
 end
 
 local function premiumListUrl()
-    local configured = trim(cfg.premiumListScript)
-    if configured ~= "" then
-        return configured
+    local urls = {}
+    local seen = {}
+    local function add(url)
+        url = trim(url)
+        if url ~= "" and not seen[url] then
+            seen[url] = true
+            urls[#urls + 1] = url
+        end
     end
-    return trim(STAND.Config.PremiumKeyListUrl or STAND.Security.PremiumKeyListUrl or "")
+
+    add(cfg.premiumListScript)
+    add(cfg.premiumListFallback)
+    add(STAND.Config.PremiumKeyListUrl or STAND.Security.PremiumKeyListUrl or "")
+    add(STAND.Config.PremiumKeyListFallbackUrl or STAND.Security.PremiumKeyListFallbackUrl or "")
+
+    return urls[1] or ""
+end
+
+local function premiumListUrls()
+    local urls = {}
+    local seen = {}
+    local function add(url)
+        url = trim(url)
+        if url ~= "" and not seen[url] then
+            seen[url] = true
+            urls[#urls + 1] = url
+        end
+    end
+
+    add(cfg.premiumListScript)
+    add(cfg.premiumListFallback)
+    add(STAND.Config.PremiumKeyListUrl or STAND.Security.PremiumKeyListUrl or "")
+    add(STAND.Config.PremiumKeyListFallbackUrl or STAND.Security.PremiumKeyListFallbackUrl or "")
+
+    return urls
 end
 
 local function hostedPublicKey(url)
@@ -337,6 +376,14 @@ local function premiumPublicKey()
     end
 
     return hostedPublicKey(premiumListUrl())
+end
+
+local function scriptUrlForTier(tier)
+    local premiumScript = trim(cfg.premiumScript)
+    if tier == "premium" and premiumScript ~= "" then
+        return premiumScript
+    end
+    return trim(cfg.script)
 end
 
 local function downloadText(url)
@@ -580,21 +627,37 @@ local function validatePremiumKey(key)
 end
 
 local function loadPremiumList()
-    local url = premiumListUrl()
-    if url == "" then
+    local urls = premiumListUrls()
+    if #urls == 0 then
         return nil, "premium list not configured"
     end
-    local body, err = downloadText(url)
-    if not body then
-        return nil, err
+
+    local merged = { keys = {}, fingerprints = {} }
+    local lastErr
+    local loaded = false
+
+    for _, url in ipairs(urls) do
+        local body, err = downloadText(url)
+        if body and not looksLikePolsecReject(body) then
+            local list, parseErr = decodePremiumList(body, cfg.executePremiumListWrapper == true)
+            if type(list) == "table" then
+                mergePremiumLists(merged, list)
+                loaded = true
+            else
+                lastErr = parseErr or "premium list did not return a table"
+            end
+        else
+            lastErr = err or "premium list rejected key"
+        end
     end
-    local list, parseErr = decodePremiumList(body, cfg.executePremiumListWrapper == true)
-    if type(list) ~= "table" then
-        return nil, parseErr or "premium list did not return a table"
+
+    if not loaded then
+        return nil, lastErr or "premium list unavailable"
     end
-    STAND.Cache.PremiumKeyList = list
+
+    STAND.Cache.PremiumKeyList = merged
     STAND.Cache.PremiumKeyListCheckedAt = os.time()
-    return list, nil
+    return merged, nil
 end
 
 local function premiumEntryActive(entry, list)
@@ -693,6 +756,18 @@ local function checkPremiumKey(key)
         externalMessage = message
     end
 
+    local embeddedEntry = type(cfg.premiumFingerprints) == "table" and cfg.premiumFingerprints[keyMark(key)] or nil
+    if embeddedEntry ~= nil then
+        local active, meta = premiumEntryActive(embeddedEntry, { issuedAt = os.time() })
+        meta = type(meta) == "table" and meta or {}
+        meta.reason = meta.reason or "premium-fingerprint"
+        meta.matchedKey = keyMark(key)
+        if active then
+            return true, meta
+        end
+        return false, meta
+    end
+
     local list, err = loadPremiumList()
     if not list then
         if premiumPublic ~= "" then
@@ -767,8 +842,10 @@ local function saveState(tier, key, mode, reason, meta)
     stand.Config.key = key
     stand.Config.FreeKeyUrl = cfg.getKey
     stand.Config.HostedScriptUrl = cfg.script
+    stand.Config.PremiumScriptUrl = cfg.premiumScript
     stand.Config.PublicKey = mergedPublicKey()
     stand.Config.PremiumKeyListUrl = premiumListUrl()
+    stand.Config.PremiumKeyListFallbackUrl = cfg.premiumListFallback
     stand.Config.BuildName = cfg.name
     stand.Config.BuildVersion = "loader-ui-5.52.1"
 
@@ -797,8 +874,10 @@ local function saveState(tier, key, mode, reason, meta)
     stand.Security.KeyExpiresAt = meta.expiresAt
     stand.Security.PremiumAccess = tierValue == "premium"
     stand.Security.HostedScriptUrl = cfg.script
+    stand.Security.PremiumScriptUrl = cfg.premiumScript
     stand.Security.PublicKey = mergedPublicKey()
     stand.Security.PremiumKeyListUrl = premiumListUrl()
+    stand.Security.PremiumKeyListFallbackUrl = cfg.premiumListFallback
     stand.Security.FreeKeyUrl = cfg.getKey
     stand.Cache.LastLoaderSaveAt = os.time()
 
@@ -881,7 +960,7 @@ local function runScript(status)
     local tierMode = "auto"
     busy = true
     local tier, tierReason, tierMeta = keyTier(key, status)
-    local url = cfg.script
+    local url = scriptUrlForTier(tier)
 
     local shouldValidateMerged = (tier == "premium" and cfg.requireMergedKeyForPremium == true) or (tier ~= "premium" and cfg.requireMergedKeyForFree ~= false)
     if shouldValidateMerged then
