@@ -2,8 +2,7 @@ local cfg = {
     name = "Coroutine Stand",
     script = "https://api.getpolsec.com/scripts/hosted/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb.lua",
     getKey = "https://getpolsec.com/ad/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb",
-    premiumListScript = "", -- second Polsec hosted premium_key_list_obfuscated.txt URL, no website key system
-    defaultTierMode = "auto",
+    premiumListScript = "https://api.getpolsec.com/scripts/hosted/170922bf810a59c5580e9ada89e5ce022e5f9a6addc3d04a91dcb7deb90353ef.lua",
 }
 
 if not game:IsLoaded() then
@@ -55,8 +54,6 @@ local conns = {}
 local guiRef = nil
 local busy = false
 local progressFill, progressText
-local tierButtons = {}
-local selectedTierMode = "auto"
 
 local function trim(v)
     v = tostring(v or "")
@@ -67,14 +64,6 @@ local function normalizeKey(key)
     return trim(key):gsub("%s+", ""):lower()
 end
 
-local function validTierMode(mode)
-    mode = trim(mode):lower()
-    if mode == "free" or mode == "premium" or mode == "auto" then
-        return mode
-    end
-    return "auto"
-end
-
 local function accessTier(tier)
     tier = trim(tier):lower()
     if tier == "free" or tier == "premium" then
@@ -83,38 +72,13 @@ local function accessTier(tier)
     return nil
 end
 
-selectedTierMode = validTierMode(STAND.Config.KeyTierMode or STAND.State.KeyTierMode or (env and rawget(env, "STAND_KEY_TIER_MODE")) or rawget(_G, "STAND_KEY_TIER_MODE") or cfg.defaultTierMode)
-
-local function refreshTierButtons()
-    for mode, button in pairs(tierButtons) do
-        local active = mode == selectedTierMode
-        button.BackgroundColor3 = active and Color3.fromRGB(46, 118, 255) or Color3.fromRGB(28, 33, 46)
-        button.TextColor3 = active and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(215, 222, 238)
-    end
+STAND.Config.KeyTierMode = "auto"
+STAND.State.KeyTierMode = "auto"
+STAND.Security.KeyTierMode = "auto"
+if env then
+    env.STAND_KEY_TIER_MODE = "auto"
 end
-
-local function setTierMode(mode, status)
-    selectedTierMode = validTierMode(mode)
-    STAND.Config.KeyTierMode = selectedTierMode
-    STAND.State.KeyTierMode = selectedTierMode
-    STAND.Security.KeyTierMode = selectedTierMode
-    if env then
-        env.STAND_KEY_TIER_MODE = selectedTierMode
-    end
-    _G.STAND_KEY_TIER_MODE = selectedTierMode
-    refreshTierButtons()
-
-    if status then
-        if selectedTierMode == "premium" then
-            status.Text = "Premium tier selected."
-        elseif selectedTierMode == "free" then
-            status.Text = "Free tier selected."
-        else
-            status.Text = "Auto tier selected."
-        end
-        status.TextColor3 = Color3.fromRGB(145, 220, 255)
-    end
-end
+_G.STAND_KEY_TIER_MODE = "auto"
 
 local function parentList()
     local list = {}
@@ -419,7 +383,25 @@ local function findPremiumEntry(list, key)
     return nil, nil
 end
 
+local function applyRuntimeKey(key)
+    key = trim(key)
+    if key == "" then return false end
+
+    if env then
+        env.script_key = key
+        env.Key = key
+        env.KEY = key
+    end
+
+    script_key = key
+    _G.script_key = key
+    _G.Key = key
+    _G.KEY = key
+    return true
+end
+
 local function checkPremiumKey(key)
+    applyRuntimeKey(key)
     local list, err = loadPremiumList()
     if not list then
         return nil, { reason = "unavailable", message = err }
@@ -437,51 +419,32 @@ local function checkPremiumKey(key)
     return false, meta
 end
 
-local function keyTier(key, mode, status)
-    mode = validTierMode(mode or selectedTierMode)
-    if mode == "free" then
-        return "free", "selected", { duration = "free" }
+local function keyTier(key, status)
+    if status then
+        status.Text = "Checking premium key..."
+        status.TextColor3 = Color3.fromRGB(145, 220, 255)
     end
 
-    if mode == "premium" or mode == "auto" then
-        if status then
-            status.Text = "Checking premium list..."
-            status.TextColor3 = Color3.fromRGB(145, 220, 255)
-        end
-        local premium, meta = checkPremiumKey(key)
-        if premium == true then
-            return "premium", "premium-list", meta
-        end
-        if mode == "premium" then
-            return nil, meta and meta.reason or "invalid-premium", meta
-        end
-        if meta and meta.reason == "expired" then
-            return nil, "expired", meta
-        end
+    local premium, meta = checkPremiumKey(key)
+    if premium == true then
+        return "premium", "premium-list", meta
+    end
+    if premium == nil then
+        return nil, meta and meta.reason or "unavailable", meta
+    end
+    if meta and meta.reason and meta.reason ~= "not-premium" then
+        return nil, meta.reason, meta
     end
 
     return "free", "free-polsec", { duration = "free" }
 end
 
 local function saveKey(key)
-    key = trim(key)
-    if key == "" then return false end
-
-    if env then
-        env.script_key = key
-        env.Key = key
-        env.KEY = key
-    end
-
-    script_key = key
-    _G.script_key = key
-    _G.Key = key
-    _G.KEY = key
-    return true
+    return applyRuntimeKey(key)
 end
 
 local function saveState(tier, key, mode, reason, meta)
-    mode = validTierMode(mode or selectedTierMode)
+    mode = "auto"
     meta = type(meta) == "table" and meta or {}
     local tierValue = accessTier(tier)
     local stand = rawget(env or {}, "STAND")
@@ -626,9 +589,9 @@ local function runScript(status)
         return
     end
 
-    local tierMode = selectedTierMode
+    local tierMode = "auto"
     busy = true
-    local tier, tierReason, tierMeta = keyTier(key, tierMode, status)
+    local tier, tierReason, tierMeta = keyTier(key, status)
     if not tier then
         busy = false
         status.TextColor3 = Color3.fromRGB(255, 120, 120)
@@ -696,7 +659,7 @@ local frame = Instance.new("Frame")
 frame.Name = "Panel"
 frame.AnchorPoint = Vector2.new(0.5, 0.5)
 frame.Position = UDim2.new(0.5, 0, 0.5, 0)
-frame.Size = UDim2.new(0, 346, 0, 350)
+frame.Size = UDim2.new(0, 346, 0, 306)
 frame.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
 frame.BorderSizePixel = 0
 frame.Parent = gui
@@ -749,49 +712,9 @@ input.Parent = frame
 corner(input, 8)
 pad(input, 12)
 
-local tierModeRow = Instance.new("Frame")
-tierModeRow.BackgroundTransparency = 1
-tierModeRow.Position = UDim2.new(0, 18, 0, 146)
-tierModeRow.Size = UDim2.new(1, -36, 0, 34)
-tierModeRow.Parent = frame
-
-local tierModeLayout = Instance.new("UIListLayout")
-tierModeLayout.FillDirection = Enum.FillDirection.Horizontal
-tierModeLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
-tierModeLayout.SortOrder = Enum.SortOrder.LayoutOrder
-tierModeLayout.Padding = UDim.new(0, 8)
-tierModeLayout.Parent = tierModeRow
-
-local function makeTierButton(mode, label, order)
-    local button = Instance.new("TextButton")
-    button.Name = label .. "TierButton"
-    button.Size = UDim2.new(1 / 3, -6, 1, 0)
-    button.BackgroundColor3 = Color3.fromRGB(28, 33, 46)
-    button.BorderSizePixel = 0
-    button.Font = Enum.Font.GothamSemibold
-    button.Text = label
-    button.TextColor3 = Color3.fromRGB(215, 222, 238)
-    button.TextSize = 12
-    button.LayoutOrder = order
-    button.Parent = tierModeRow
-    corner(button, 8)
-    tierButtons[mode] = button
-
-    track(button.Activated:Connect(function()
-        setTierMode(mode, status)
-    end))
-
-    return button
-end
-
-makeTierButton("auto", "Auto", 1)
-makeTierButton("free", "Free", 2)
-makeTierButton("premium", "Premium", 3)
-refreshTierButtons()
-
 local progress = Instance.new("Frame")
 progress.BackgroundTransparency = 1
-progress.Position = UDim2.new(0, 18, 0, 192)
+progress.Position = UDim2.new(0, 18, 0, 154)
 progress.Size = UDim2.new(1, -36, 0, 28)
 progress.Parent = frame
 
@@ -822,7 +745,7 @@ progressFill.Parent = trackBar
 corner(progressFill, 5)
 
 local loadButton = Instance.new("TextButton")
-loadButton.Position = UDim2.new(0, 18, 0, 234)
+loadButton.Position = UDim2.new(0, 18, 0, 196)
 loadButton.Size = UDim2.new(1, -36, 0, 42)
 loadButton.BackgroundColor3 = Color3.fromRGB(46, 118, 255)
 loadButton.BorderSizePixel = 0
@@ -834,7 +757,7 @@ loadButton.Parent = frame
 corner(loadButton, 8)
 
 local getKeyButton = Instance.new("TextButton")
-getKeyButton.Position = UDim2.new(0, 18, 0, 290)
+getKeyButton.Position = UDim2.new(0, 18, 0, 250)
 getKeyButton.Size = UDim2.new(1, -36, 0, 36)
 getKeyButton.BackgroundColor3 = Color3.fromRGB(28, 33, 46)
 getKeyButton.BorderSizePixel = 0
