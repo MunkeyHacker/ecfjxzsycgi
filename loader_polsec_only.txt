@@ -3,15 +3,14 @@ local cfg = {
     script = "https://api.getpolsec.com/scripts/hosted/59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d.lua",
     publicKey = "59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d",
     getKey = "https://getpolsec.com/ad/59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d",
-    premiumListScript = "https://api.getpolsec.com/scripts/hosted/80e2736dd1f1384d6c370e9394a0e7b26e164b207471d3358c167955f2281393.lua",
-    premiumListFallback = "https://raw.githubusercontent.com/MunkeyHacker/ecfjxzsycgi/refs/heads/main/premium_key_list_obfuscated.txt",
-    premiumScript = "https://raw.githubusercontent.com/MunkeyHacker/ecfjxzsycgi/refs/heads/main/obfuscated_polsec_merged.txt",
+    premiumScript = "https://api.getpolsec.com/scripts/hosted/80e2736dd1f1384d6c370e9394a0e7b26e164b207471d3358c167955f2281393.lua",
+    premiumPublicKey = "80e2736dd1f1384d6c370e9394a0e7b26e164b207471d3358c167955f2281393",
+    premiumListScript = "",
+    premiumListFallback = "",
     requireMergedKeyForFree = true,
     requireMergedKeyForPremium = false,
     executePremiumListWrapper = false,
-    premiumFingerprints = {
-        ["795254271:496447317:484942475"] = { duration = "never" },
-    },
+    premiumFingerprints = {},
 }
 
 if not game:IsLoaded() then
@@ -370,7 +369,17 @@ local function mergedPublicKey()
 end
 
 local function premiumPublicKey()
-    local configured = trim(STAND.Config.PremiumPublicKey or STAND.Security.PremiumPublicKey or "")
+    local configured = trim(cfg.premiumPublicKey)
+    if configured ~= "" then
+        return configured
+    end
+
+    configured = hostedPublicKey(cfg.premiumScript)
+    if configured ~= "" then
+        return configured
+    end
+
+    configured = trim(STAND.Config.PremiumPublicKey or STAND.Security.PremiumPublicKey or "")
     if configured ~= "" then
         return configured
     end
@@ -989,7 +998,7 @@ local function runScript(status)
         local fn, err = download(url)
         if not fn then
             busy = false
-            status.Text = err == "invalid key" and (tier == "premium" and "Premium key not in merged PolSec." or "Incorrect key.") or "Load failed."
+            status.Text = err == "invalid key" and (tier == "premium" and "Premium key not valid for premium script." or "Incorrect key.") or "Load failed."
             status.TextColor3 = Color3.fromRGB(255, 120, 120)
             setProgress(0, err == "invalid key" and "Incorrect" or "Failed")
             warn("[Coroutine] " .. tostring(err))
