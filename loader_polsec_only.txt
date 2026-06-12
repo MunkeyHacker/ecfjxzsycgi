@@ -1,8 +1,8 @@
 local cfg = {
     name = "Coroutine Stand",
-    script = "https://api.getpolsec.com/scripts/hosted/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb.lua",
-    getKey = "https://getpolsec.com/ad/2cd45a4bf7f0a42e3abaa4db63d64b9bf397340010771b0f1257f30be89f1acb",
-    premiumListScript = "https://api.getpolsec.com/scripts/hosted/170922bf810a59c5580e9ada89e5ce022e5f9a6addc3d04a91dcb7deb90353ef.lua",
+    script = "https://api.getpolsec.com/scripts/hosted/34667ea64841cf6febaa8c0e25165a6bda1c7fe6c33cca2f7af202deb038657e.lua",
+    getKey = "https://getpolsec.com/ad/34667ea64841cf6febaa8c0e25165a6bda1c7fe6c33cca2f7af202deb038657e",
+    premiumListScript = "https://api.getpolsec.com/scripts/hosted/8c18f07829949c03df18b8052ab36f2062fbe7d1ac9862c4a057cdea47d9f466.lua",
 }
 
 if not game:IsLoaded() then
