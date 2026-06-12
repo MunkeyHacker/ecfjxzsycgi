@@ -309,6 +309,10 @@ local function premiumListUrl()
     return trim(STAND.Config.PremiumKeyListUrl or STAND.Security.PremiumKeyListUrl or "")
 end
 
+local function hostedPublicKey(url)
+    return trim(tostring(url or ""):match("/hosted/([%w]+)%.lua") or "")
+end
+
 local function mergedPublicKey()
     local configured = trim(cfg.publicKey)
     if configured ~= "" then
@@ -320,7 +324,16 @@ local function mergedPublicKey()
         return configured
     end
 
-    return trim(tostring(cfg.script or ""):match("/hosted/([%w]+)%.lua") or "")
+    return hostedPublicKey(cfg.script)
+end
+
+local function premiumPublicKey()
+    local configured = trim(STAND.Config.PremiumPublicKey or STAND.Security.PremiumPublicKey or "")
+    if configured ~= "" then
+        return configured
+    end
+
+    return hostedPublicKey(premiumListUrl())
 end
 
 local function downloadText(url)
@@ -525,8 +538,8 @@ local function decodePremiumList(body)
     return list, nil
 end
 
-local function validateMergedKey(key)
-    local publicKey = mergedPublicKey()
+local function validatePolsecKey(publicKey, key)
+    publicKey = trim(publicKey)
     if publicKey == "" then
         return true, "missing-public-key"
     end
@@ -551,6 +564,14 @@ local function validateMergedKey(key)
     end
 
     return body:lower():find('"valid"%s*:%s*true') ~= nil, body
+end
+
+local function validateMergedKey(key)
+    return validatePolsecKey(mergedPublicKey(), key)
+end
+
+local function validatePremiumKey(key)
+    return validatePolsecKey(premiumPublicKey(), key)
 end
 
 local function loadPremiumList()
@@ -656,6 +677,16 @@ end
 
 local function checkPremiumKey(key)
     applyRuntimeKey(key)
+
+    local premiumPublic = premiumPublicKey()
+    if premiumPublic ~= "" then
+        local valid, message = validatePremiumKey(key)
+        if valid then
+            return true, { duration = "never", reason = "premium-polsec", publicKey = premiumPublic }
+        end
+        return false, { reason = "not-premium", message = message, publicKey = premiumPublic }
+    end
+
     local list, err = loadPremiumList()
     if not list then
         return nil, { reason = "unavailable", message = err }
@@ -843,18 +874,16 @@ local function runScript(status)
     local tier, tierReason, tierMeta = keyTier(key, status)
     local url = cfg.script
 
-    if tier ~= "premium" then
-        status.Text = "Checking key..."
-        status.TextColor3 = Color3.fromRGB(145, 220, 255)
-        local valid, message = validateMergedKey(key)
-        if not valid then
-            busy = false
-            status.Text = "Incorrect key."
-            status.TextColor3 = Color3.fromRGB(255, 120, 120)
-            setProgress(0, "Incorrect")
-            warn("[Coroutine] " .. tostring(message or "invalid key"))
-            return
-        end
+    status.Text = "Checking key..."
+    status.TextColor3 = Color3.fromRGB(145, 220, 255)
+    local valid, message = validateMergedKey(key)
+    if not valid then
+        busy = false
+        status.Text = tier == "premium" and "Premium key missing in merged PolSec." or "Incorrect key."
+        status.TextColor3 = Color3.fromRGB(255, 120, 120)
+        setProgress(0, "Incorrect")
+        warn("[Coroutine] " .. tostring(message or "invalid key"))
+        return
     end
 
     saveKey(key)
