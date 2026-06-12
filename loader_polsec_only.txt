@@ -4,6 +4,9 @@ local cfg = {
     publicKey = "59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d",
     getKey = "https://getpolsec.com/ad/59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d",
     premiumListScript = "https://api.getpolsec.com/scripts/hosted/80e2736dd1f1384d6c370e9394a0e7b26e164b207471d3358c167955f2281393.lua",
+    requireMergedKeyForFree = true,
+    requireMergedKeyForPremium = false,
+    executePremiumListWrapper = false,
 }
 
 if not game:IsLoaded() then
@@ -523,17 +526,19 @@ local function parseExecutablePremiumList(body)
     return list
 end
 
-local function decodePremiumList(body)
+local function decodePremiumList(body, allowExecution)
     local list = { keys = {} }
     local decoded = decodeBytePayload(body)
     if decoded and decoded ~= body then
-        mergePremiumLists(list, decodePremiumList(decoded))
+        mergePremiumLists(list, decodePremiumList(decoded, allowExecution))
     end
 
     mergePremiumLists(list, parsePremiumKeyLinesBlock(body))
     mergePremiumLists(list, parseTableStylePremiumKeys(body))
     mergePremiumLists(list, parsePlainPremiumList(body))
-    mergePremiumLists(list, parseExecutablePremiumList(body))
+    if allowExecution == true then
+        mergePremiumLists(list, parseExecutablePremiumList(body))
+    end
 
     return list, nil
 end
@@ -583,7 +588,7 @@ local function loadPremiumList()
     if not body then
         return nil, err
     end
-    local list, parseErr = decodePremiumList(body)
+    local list, parseErr = decodePremiumList(body, cfg.executePremiumListWrapper == true)
     if type(list) ~= "table" then
         return nil, parseErr or "premium list did not return a table"
     end
@@ -679,21 +684,25 @@ local function checkPremiumKey(key)
     applyRuntimeKey(key)
 
     local premiumPublic = premiumPublicKey()
+    local externalMessage
     if premiumPublic ~= "" then
         local valid, message = validatePremiumKey(key)
         if valid then
             return true, { duration = "never", reason = "premium-polsec", publicKey = premiumPublic }
         end
-        return false, { reason = "not-premium", message = message, publicKey = premiumPublic }
+        externalMessage = message
     end
 
     local list, err = loadPremiumList()
     if not list then
+        if premiumPublic ~= "" then
+            return false, { reason = "not-premium", message = externalMessage or err, publicKey = premiumPublic }
+        end
         return nil, { reason = "unavailable", message = err }
     end
     local entry, matchedKey = findPremiumEntry(list, key)
     if entry == nil then
-        return false, { reason = "not-premium" }
+        return false, { reason = "not-premium", message = externalMessage, publicKey = premiumPublic }
     end
     local active, meta = premiumEntryActive(entry, list)
     meta = type(meta) == "table" and meta or {}
@@ -874,16 +883,19 @@ local function runScript(status)
     local tier, tierReason, tierMeta = keyTier(key, status)
     local url = cfg.script
 
-    status.Text = "Checking key..."
-    status.TextColor3 = Color3.fromRGB(145, 220, 255)
-    local valid, message = validateMergedKey(key)
-    if not valid then
-        busy = false
-        status.Text = tier == "premium" and "Premium key missing in merged PolSec." or "Incorrect key."
-        status.TextColor3 = Color3.fromRGB(255, 120, 120)
-        setProgress(0, "Incorrect")
-        warn("[Coroutine] " .. tostring(message or "invalid key"))
-        return
+    local shouldValidateMerged = (tier == "premium" and cfg.requireMergedKeyForPremium == true) or (tier ~= "premium" and cfg.requireMergedKeyForFree ~= false)
+    if shouldValidateMerged then
+        status.Text = "Checking key..."
+        status.TextColor3 = Color3.fromRGB(145, 220, 255)
+        local valid, message = validateMergedKey(key)
+        if not valid then
+            busy = false
+            status.Text = tier == "premium" and "Premium key missing in merged PolSec." or "Incorrect key."
+            status.TextColor3 = Color3.fromRGB(255, 120, 120)
+            setProgress(0, "Incorrect")
+            warn("[Coroutine] " .. tostring(message or "invalid key"))
+            return
+        end
     end
 
     saveKey(key)
