@@ -1,8 +1,8 @@
 local cfg = {
     name = "Coroutine Stand",
-    script = "https://api.getpolsec.com/scripts/hosted/34667ea64841cf6febaa8c0e25165a6bda1c7fe6c33cca2f7af202deb038657e.lua",
-    getKey = "https://getpolsec.com/ad/34667ea64841cf6febaa8c0e25165a6bda1c7fe6c33cca2f7af202deb038657e",
-    premiumListScript = "https://api.getpolsec.com/scripts/hosted/8c18f07829949c03df18b8052ab36f2062fbe7d1ac9862c4a057cdea47d9f466.lua",
+    script = "https://api.getpolsec.com/scripts/hosted/59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d.lua",
+    getKey = "https://getpolsec.com/ad/59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d",
+    premiumListScript = "https://api.getpolsec.com/scripts/hosted/80e2736dd1f1384d6c370e9394a0e7b26e164b207471d3358c167955f2281393.lua",
 }
 
 if not game:IsLoaded() then
@@ -268,6 +268,28 @@ local function downloadText(url)
     return body, nil
 end
 
+local function looksLikePolsecReject(body)
+    body = tostring(body or ""):lower()
+    if body == "" then
+        return false
+    end
+
+    if body:find(":kick%(") or body:find("%.kick%(") then
+        return true
+    end
+    if body:find("invalid key", 1, true) or body:find("incorrect key", 1, true) then
+        return true
+    end
+    if body:find("key expired", 1, true) or body:find("blacklisted", 1, true) then
+        return true
+    end
+    if body:find("hwid", 1, true) and body:find("mismatch", 1, true) then
+        return true
+    end
+
+    return false
+end
+
 local function parsePlainPremiumList(body)
     local list = { keys = {} }
     for line in tostring(body or ""):gmatch("[^\r\n]+") do
@@ -288,15 +310,122 @@ local function parsePlainPremiumList(body)
     return list
 end
 
-local function decodePremiumList(body)
-    local fn = loadstring(body)
-    if fn then
-        local ok, result = pcall(fn)
-        if ok and type(result) == "table" then
-            return result, nil
+local function mergePremiumLists(into, from)
+    into.keys = type(into.keys) == "table" and into.keys or {}
+    if type(from) ~= "table" then
+        return into
+    end
+
+    local maps = { from.keys, from.premium }
+    for _, map in ipairs(maps) do
+        if type(map) == "table" then
+            for key, entry in pairs(map) do
+                into.keys[key] = entry
+            end
         end
     end
-    return parsePlainPremiumList(body), nil
+
+    if type(from.fingerprints) == "table" then
+        into.fingerprints = type(into.fingerprints) == "table" and into.fingerprints or {}
+        for mark, entry in pairs(from.fingerprints) do
+            into.fingerprints[mark] = entry
+        end
+    end
+
+    if not into.issuedAt then
+        into.issuedAt = from.issuedAt or from.generatedAt
+    end
+
+    return into
+end
+
+local function parseIssuedAtCall(body)
+    body = tostring(body or "")
+    local args = body:match("DEFAULT_ISSUED_AT%s*=%s*issuedAt%s*%((.-)%)")
+    if not args then
+        return nil
+    end
+
+    local values = {}
+    for number in args:gmatch("%d+") do
+        values[#values + 1] = tonumber(number)
+    end
+
+    if not values[1] or not values[2] or not values[3] then
+        return nil
+    end
+
+    return os.time({
+        year = values[1],
+        month = values[2],
+        day = values[3],
+        hour = values[4] or 0,
+        min = values[5] or 0,
+        sec = values[6] or 0,
+    })
+end
+
+local function parsePremiumKeyLinesBlock(body)
+    local list = { keys = {} }
+    body = tostring(body or "")
+
+    for block in body:gmatch("PREMIUM_KEY_LINES%s*=%s*%[%[(.-)%]%]") do
+        mergePremiumLists(list, parsePlainPremiumList(block))
+    end
+
+    list.issuedAt = parseIssuedAtCall(body)
+
+    return list
+end
+
+local function decodeBytePayload(body)
+    body = tostring(body or "")
+    local payload = body:match("local%s+b%s*=%s*%{(.-)%}") or body:match("b%s*=%s*%{(.-)%}")
+    if not payload then
+        return nil
+    end
+
+    local chars = {}
+    for number in payload:gmatch("%d+") do
+        number = tonumber(number)
+        if number and number >= 0 and number <= 255 then
+            chars[#chars + 1] = string.char(number)
+        end
+    end
+
+    if #chars == 0 then
+        return nil
+    end
+
+    return table.concat(chars)
+end
+
+local function parseTableStylePremiumKeys(body)
+    local list = { keys = {} }
+    body = tostring(body or "")
+
+    for key, entryBody in body:gmatch("%[\"([^\"]+)\"%]%s*=%s*%{(.-)%}") do
+        local duration = entryBody:match("duration%s*=%s*\"([^\"]+)\"") or entryBody:match("expires%s*=%s*\"([^\"]+)\"") or "never"
+        local issuedAt = tonumber(entryBody:match("issuedAt%s*=%s*(%d+)") or "")
+        local expiresAt = tonumber(entryBody:match("expiresAt%s*=%s*(%d+)") or "")
+        list.keys[key] = { duration = duration, issuedAt = issuedAt, expiresAt = expiresAt }
+    end
+
+    return list
+end
+
+local function decodePremiumList(body)
+    local list = { keys = {} }
+    local decoded = decodeBytePayload(body)
+    if decoded and decoded ~= body then
+        mergePremiumLists(list, decodePremiumList(decoded))
+    end
+
+    mergePremiumLists(list, parsePremiumKeyLinesBlock(body))
+    mergePremiumLists(list, parseTableStylePremiumKeys(body))
+    mergePremiumLists(list, parsePlainPremiumList(body))
+
+    return list, nil
 end
 
 local function loadPremiumList()
@@ -429,14 +558,11 @@ local function keyTier(key, status)
     if premium == true then
         return "premium", "premium-list", meta
     end
-    if premium == nil then
-        return nil, meta and meta.reason or "unavailable", meta
-    end
-    if meta and meta.reason and meta.reason ~= "not-premium" then
-        return nil, meta.reason, meta
-    end
 
-    return "free", "free-polsec", { duration = "free" }
+    meta = type(meta) == "table" and meta or {}
+    meta.duration = meta.duration or "free"
+    meta.premiumCheckReason = meta.reason or (premium == nil and "unavailable" or "not-premium")
+    return "free", "merged-polsec", meta
 end
 
 local function saveKey(key)
@@ -557,6 +683,10 @@ local function download(url)
         return nil, "empty response"
     end
 
+    if looksLikePolsecReject(body) then
+        return nil, "invalid key"
+    end
+
     local fn, err = loadstring(body)
     if not fn then
         return nil, tostring(err)
@@ -592,27 +722,12 @@ local function runScript(status)
     local tierMode = "auto"
     busy = true
     local tier, tierReason, tierMeta = keyTier(key, status)
-    if not tier then
-        busy = false
-        status.TextColor3 = Color3.fromRGB(255, 120, 120)
-        if tierReason == "expired" then
-            status.Text = "Premium key expired."
-        elseif tierReason == "unavailable" then
-            status.Text = "Premium list unavailable."
-        elseif tierReason == "missing-issuedAt" then
-            status.Text = "Premium key missing issued date."
-        else
-            status.Text = "Invalid premium key."
-        end
-        setProgress(0, "Invalid")
-        return
-    end
     local url = cfg.script
 
     saveKey(key)
     saveState(tier, key, tierMode, tierReason, tierMeta)
 
-    status.Text = tier == "premium" and "Premium accepted." or "Checking free key..."
+    status.Text = tier == "premium" and "Premium accepted." or "Checking key..."
     status.TextColor3 = Color3.fromRGB(145, 220, 255)
     setProgress(0.2, "Connecting")
 
@@ -621,9 +736,9 @@ local function runScript(status)
         local fn, err = download(url)
         if not fn then
             busy = false
-            status.Text = "Load failed."
+            status.Text = err == "invalid key" and "Incorrect key." or "Load failed."
             status.TextColor3 = Color3.fromRGB(255, 120, 120)
-            setProgress(0, "Failed")
+            setProgress(0, err == "invalid key" and "Incorrect" or "Failed")
             warn("[Coroutine] " .. tostring(err))
             return
         end
