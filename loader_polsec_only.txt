@@ -10,7 +10,6 @@ local cfg = {
     requireMergedKeyForFree = true,
     requireMergedKeyForPremium = false,
     executePremiumListWrapper = false,
-    premiumFingerprints = {},
 }
 
 if not game:IsLoaded() then
@@ -763,18 +762,6 @@ local function checkPremiumKey(key)
             return true, { duration = "never", reason = "premium-polsec", publicKey = premiumPublic }
         end
         externalMessage = message
-    end
-
-    local embeddedEntry = type(cfg.premiumFingerprints) == "table" and cfg.premiumFingerprints[keyMark(key)] or nil
-    if embeddedEntry ~= nil then
-        local active, meta = premiumEntryActive(embeddedEntry, { issuedAt = os.time() })
-        meta = type(meta) == "table" and meta or {}
-        meta.reason = meta.reason or "premium-fingerprint"
-        meta.matchedKey = keyMark(key)
-        if active then
-            return true, meta
-        end
-        return false, meta
     end
 
     local list, err = loadPremiumList()
