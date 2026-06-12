@@ -1,6 +1,7 @@
 local cfg = {
     name = "Coroutine Stand",
     script = "https://api.getpolsec.com/scripts/hosted/59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d.lua",
+    publicKey = "59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d",
     getKey = "https://getpolsec.com/ad/59da0d1d04779262390053589786bbbec72237cef9d5ef8587a03e7411b70c6d",
     premiumListScript = "https://api.getpolsec.com/scripts/hosted/80e2736dd1f1384d6c370e9394a0e7b26e164b207471d3358c167955f2281393.lua",
 }
@@ -12,6 +13,7 @@ if not game:IsLoaded() then
 end
 
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 while not LocalPlayer do
     Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
@@ -62,6 +64,59 @@ end
 
 local function normalizeKey(key)
     return trim(key):gsub("%s+", ""):lower()
+end
+
+local function urlEncode(value)
+    local ok, encoded = pcall(function()
+        return HttpService:UrlEncode(tostring(value or ""))
+    end)
+    if ok and type(encoded) == "string" then
+        return encoded
+    end
+    return tostring(value or ""):gsub("([^%w%-_%.~])", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end)
+end
+
+local function currentHwid()
+    local candidates = {}
+
+    if type(gethwid) == "function" then
+        local ok, value = pcall(gethwid)
+        if ok then
+            candidates[#candidates + 1] = value
+        end
+    end
+
+    if env then
+        candidates[#candidates + 1] = rawget(env, "HWID")
+        candidates[#candidates + 1] = rawget(env, "hwid")
+    end
+
+    local ok, analytics = pcall(function()
+        return game:GetService("RbxAnalyticsService")
+    end)
+    if ok and analytics then
+        ok, analytics = pcall(function()
+            return analytics:GetClientId()
+        end)
+        if ok then
+            candidates[#candidates + 1] = analytics
+        end
+    end
+
+    if LocalPlayer then
+        candidates[#candidates + 1] = tostring(LocalPlayer.UserId)
+    end
+
+    for _, value in ipairs(candidates) do
+        value = trim(value)
+        if value ~= "" then
+            return value
+        end
+    end
+
+    return "unknown"
 end
 
 local function accessTier(tier)
@@ -254,6 +309,20 @@ local function premiumListUrl()
     return trim(STAND.Config.PremiumKeyListUrl or STAND.Security.PremiumKeyListUrl or "")
 end
 
+local function mergedPublicKey()
+    local configured = trim(cfg.publicKey)
+    if configured ~= "" then
+        return configured
+    end
+
+    configured = trim(STAND.Config.PublicKey or STAND.Security.PublicKey or "")
+    if configured ~= "" then
+        return configured
+    end
+
+    return trim(tostring(cfg.script or ""):match("/hosted/([%w]+)%.lua") or "")
+end
+
 local function downloadText(url)
     local ok, body = pcall(function()
         return game:HttpGet(url)
@@ -261,10 +330,12 @@ local function downloadText(url)
     if not ok then
         return nil, tostring(body)
     end
+
     body = tostring(body or "")
     if body == "" then
         return nil, "empty response"
     end
+
     return body, nil
 end
 
@@ -414,6 +485,31 @@ local function parseTableStylePremiumKeys(body)
     return list
 end
 
+local function parseExecutablePremiumList(body)
+    local list = { keys = {} }
+    body = tostring(body or "")
+    if body == "" or looksLikePolsecReject(body) then
+        return list
+    end
+
+    local loader = loadstring or load
+    if type(loader) ~= "function" then
+        return list
+    end
+
+    local fn = loader(body)
+    if type(fn) ~= "function" then
+        return list
+    end
+
+    local ok, result = pcall(fn)
+    if ok and type(result) == "table" then
+        mergePremiumLists(list, result)
+    end
+
+    return list
+end
+
 local function decodePremiumList(body)
     local list = { keys = {} }
     local decoded = decodeBytePayload(body)
@@ -424,8 +520,37 @@ local function decodePremiumList(body)
     mergePremiumLists(list, parsePremiumKeyLinesBlock(body))
     mergePremiumLists(list, parseTableStylePremiumKeys(body))
     mergePremiumLists(list, parsePlainPremiumList(body))
+    mergePremiumLists(list, parseExecutablePremiumList(body))
 
     return list, nil
+end
+
+local function validateMergedKey(key)
+    local publicKey = mergedPublicKey()
+    if publicKey == "" then
+        return true, "missing-public-key"
+    end
+
+    local url = "https://api.getpolsec.com/external?public_key=" .. urlEncode(publicKey)
+        .. "&key=" .. urlEncode(key)
+        .. "&hwid=" .. urlEncode(currentHwid())
+
+    local ok, body = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not ok then
+        return false, tostring(body)
+    end
+
+    body = tostring(body or "")
+    local decodedOk, decoded = pcall(function()
+        return HttpService:JSONDecode(body)
+    end)
+    if decodedOk and type(decoded) == "table" then
+        return decoded.valid == true, tostring(decoded.message or "")
+    end
+
+    return body:lower():find('"valid"%s*:%s*true') ~= nil, body
 end
 
 local function loadPremiumList()
@@ -602,6 +727,7 @@ local function saveState(tier, key, mode, reason, meta)
     stand.Config.key = key
     stand.Config.FreeKeyUrl = cfg.getKey
     stand.Config.HostedScriptUrl = cfg.script
+    stand.Config.PublicKey = mergedPublicKey()
     stand.Config.PremiumKeyListUrl = premiumListUrl()
     stand.Config.BuildName = cfg.name
     stand.Config.BuildVersion = "loader-ui-5.52.1"
@@ -631,6 +757,7 @@ local function saveState(tier, key, mode, reason, meta)
     stand.Security.KeyExpiresAt = meta.expiresAt
     stand.Security.PremiumAccess = tierValue == "premium"
     stand.Security.HostedScriptUrl = cfg.script
+    stand.Security.PublicKey = mergedPublicKey()
     stand.Security.PremiumKeyListUrl = premiumListUrl()
     stand.Security.FreeKeyUrl = cfg.getKey
     stand.Cache.LastLoaderSaveAt = os.time()
@@ -670,17 +797,9 @@ local function copy(text)
 end
 
 local function download(url)
-    local ok, body = pcall(function()
-        return game:HttpGet(url)
-    end)
-
-    if not ok then
-        return nil, tostring(body)
-    end
-
-    body = tostring(body or "")
-    if body == "" then
-        return nil, "empty response"
+    local body, err = downloadText(url)
+    if not body then
+        return nil, err
     end
 
     if looksLikePolsecReject(body) then
@@ -724,6 +843,20 @@ local function runScript(status)
     local tier, tierReason, tierMeta = keyTier(key, status)
     local url = cfg.script
 
+    if tier ~= "premium" then
+        status.Text = "Checking key..."
+        status.TextColor3 = Color3.fromRGB(145, 220, 255)
+        local valid, message = validateMergedKey(key)
+        if not valid then
+            busy = false
+            status.Text = "Incorrect key."
+            status.TextColor3 = Color3.fromRGB(255, 120, 120)
+            setProgress(0, "Incorrect")
+            warn("[Coroutine] " .. tostring(message or "invalid key"))
+            return
+        end
+    end
+
     saveKey(key)
     saveState(tier, key, tierMode, tierReason, tierMeta)
 
@@ -736,7 +869,7 @@ local function runScript(status)
         local fn, err = download(url)
         if not fn then
             busy = false
-            status.Text = err == "invalid key" and "Incorrect key." or "Load failed."
+            status.Text = err == "invalid key" and (tier == "premium" and "Premium key not in merged PolSec." or "Incorrect key.") or "Load failed."
             status.TextColor3 = Color3.fromRGB(255, 120, 120)
             setProgress(0, err == "invalid key" and "Incorrect" or "Failed")
             warn("[Coroutine] " .. tostring(err))
