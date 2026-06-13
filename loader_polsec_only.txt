@@ -20,6 +20,7 @@ end
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 while not LocalPlayer do
     Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
@@ -218,6 +219,84 @@ local function track(c)
         table.insert(STAND.Connections, c)
     end
     return c
+end
+
+local function clampFrameToScreen(frame)
+    local camera = workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize or Vector2.new(360, 640)
+    local size = frame.AbsoluteSize
+    if size.X <= 0 or size.Y <= 0 then
+        return
+    end
+
+    local halfX = size.X * frame.AnchorPoint.X
+    local halfY = size.Y * frame.AnchorPoint.Y
+    local rightHalf = size.X * (1 - frame.AnchorPoint.X)
+    local bottomHalf = size.Y * (1 - frame.AnchorPoint.Y)
+    local minX = halfX + 8
+    local maxX = viewport.X - rightHalf - 8
+    local minY = halfY + 8
+    local maxY = viewport.Y - bottomHalf - 8
+
+    if maxX < minX then
+        minX = viewport.X * 0.5
+        maxX = minX
+    end
+    if maxY < minY then
+        minY = viewport.Y * 0.5
+        maxY = minY
+    end
+
+    local centerX = frame.AbsolutePosition.X + halfX
+    local centerY = frame.AbsolutePosition.Y + halfY
+    frame.Position = UDim2.fromOffset(math.clamp(centerX, minX, maxX), math.clamp(centerY, minY, maxY))
+end
+
+local function makeDraggable(frame, handle)
+    handle.Active = true
+    local dragging = false
+    local dragInput = nil
+    local dragStart = nil
+    local startPos = nil
+
+    local function update(input)
+        if not dragStart or not startPos then return end
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        clampFrameToScreen(frame)
+    end
+
+    track(handle.InputBegan:Connect(function(input)
+        local inputType = input.UserInputType
+        if inputType ~= Enum.UserInputType.MouseButton1 and inputType ~= Enum.UserInputType.Touch then
+            return
+        end
+
+        dragging = true
+        dragInput = input
+        dragStart = input.Position
+        startPos = frame.Position
+
+        track(input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+                dragInput = nil
+            end
+        end))
+    end))
+
+    track(handle.InputChanged:Connect(function(input)
+        local inputType = input.UserInputType
+        if inputType == Enum.UserInputType.MouseMovement or inputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end))
+
+    track(UserInputService.InputChanged:Connect(function(input)
+        if dragging and input == dragInput then
+            update(input)
+        end
+    end))
 end
 
 local function corner(parent, radius)
@@ -1026,6 +1105,7 @@ frame.Position = UDim2.new(0.5, 0, 0.5, 0)
 frame.Size = UDim2.new(0, 346, 0, 306)
 frame.BackgroundColor3 = Color3.fromRGB(18, 21, 30)
 frame.BorderSizePixel = 0
+frame.Active = true
 frame.Parent = gui
 corner(frame, 10)
 
@@ -1044,6 +1124,7 @@ title.Text = cfg.name
 title.TextColor3 = Color3.fromRGB(245, 248, 255)
 title.TextSize = 18
 title.TextXAlignment = Enum.TextXAlignment.Left
+title.Active = true
 title.Parent = frame
 
 local status = Instance.new("TextLabel")
@@ -1056,7 +1137,11 @@ status.TextColor3 = Color3.fromRGB(155, 166, 190)
 status.TextSize = 13
 status.TextWrapped = true
 status.TextXAlignment = Enum.TextXAlignment.Left
+status.Active = true
 status.Parent = frame
+
+makeDraggable(frame, title)
+makeDraggable(frame, status)
 
 local input = Instance.new("TextBox")
 input.Name = "KeyInput"
